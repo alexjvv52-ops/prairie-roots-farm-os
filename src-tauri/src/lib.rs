@@ -77,6 +77,9 @@ pub fn run() {
                 {
                     if let Ok(mut conn) = db.0.lock() {
                         snapshots::try_take_snapshot(&mut conn, &paths.snapshots_dir);
+                        // Mirror of setup(): the snapshot just appended event_log. Catch the file
+                        // up before the process exits, or this session's last event is never logged.
+                        event_file::on_app_shutdown(&conn, &paths.folder_path);
                     }
                 }
             }
@@ -6364,6 +6367,209 @@ mod tests {
             "pending event_log row must not appear as a divergence: {:?}",
             outcome.report().unknown_diffs
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --- Shutdown flush mirror (close-time snapshot must reach events.jsonl) ---
+
+    #[test]
+    fn shutdown_flush_clears_close_snapshot_lag() {
+        let dir = temp_farm_dir();
+        let farm = dir.join("farm.db");
+        let snaps = dir.join("snapshots");
+        fs::create_dir_all(&snaps).unwrap();
+
+        // Session open (setup order after open_and_migrate).
+        let mut conn = db::open_and_migrate(&farm).unwrap();
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_start(&conn, &dir);
+        let after_open = projection::verify_replay_paths(&farm, &event_file::events_path(&dir)).unwrap();
+        assert_eq!(after_open.report().flush_lag, 0);
+
+        // Close write WITHOUT the new flush — permanent lag of 1 (pre-fix defect).
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        let lagged = projection::verify_replay_paths(&farm, &event_file::events_path(&dir)).unwrap();
+        assert_eq!(lagged.report().flush_lag, 1);
+        assert!(lagged.exit_nonzero());
+        assert!(
+            lagged.summary_line().contains("1 event(s) pending flush"),
+            "{}",
+            lagged.summary_line()
+        );
+
+        // Shutdown mirror clears the lag.
+        event_file::on_app_shutdown(&conn, &dir);
+        let after_close =
+            projection::verify_replay_paths(&farm, &event_file::events_path(&dir)).unwrap();
+        assert_eq!(after_close.report().flush_lag, 0);
+        assert!(!after_close.exit_nonzero(), "{}", after_close.summary_line());
+        assert!(after_close.report().unknown_diffs.is_empty());
+        let watermark = event_file::read_watermark(&event_file::events_path(&dir)).unwrap();
+        assert_eq!(watermark, after_close.report().live_max_seq);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_flush_two_sessions_no_accumulation() {
+        let dir = temp_farm_dir();
+        let farm = dir.join("farm.db");
+        let snaps = dir.join("snapshots");
+        fs::create_dir_all(&snaps).unwrap();
+
+        for _ in 0..2 {
+            let mut conn = db::open_and_migrate(&farm).unwrap();
+            snapshots::try_take_snapshot(&mut conn, &snaps);
+            event_file::on_app_start(&conn, &dir);
+            snapshots::try_take_snapshot(&mut conn, &snaps);
+            event_file::on_app_shutdown(&conn, &dir);
+            drop(conn);
+        }
+
+        let conn = Connection::open(&farm).unwrap();
+        db::configure(&conn).unwrap();
+        let outcome =
+            projection::verify_replay_paths(&farm, &event_file::events_path(&dir)).unwrap();
+        assert_eq!(outcome.report().flush_lag, 0);
+        let watermark = event_file::read_watermark(&event_file::events_path(&dir)).unwrap();
+        assert_eq!(watermark, outcome.report().live_max_seq);
+        drop(conn);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_flush_close_snapshot_reaches_events_jsonl() {
+        let dir = temp_farm_dir();
+        let farm = dir.join("farm.db");
+        let snaps = dir.join("snapshots");
+        fs::create_dir_all(&snaps).unwrap();
+
+        let mut conn = db::open_and_migrate(&farm).unwrap();
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_start(&conn, &dir);
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_shutdown(&conn, &dir);
+
+        let (id, kind): (String, String) = conn
+            .query_row(
+                "SELECT id, kind FROM event_log WHERE seq = (SELECT MAX(seq) FROM event_log)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "snapshot.taken");
+
+        let jsonl = fs::read_to_string(event_file::events_path(&dir)).unwrap();
+        assert!(
+            jsonl.contains(&id),
+            "newest event_log id must appear in events.jsonl"
+        );
+
+        let db_ids: HashSet<String> = conn
+            .prepare("SELECT id FROM event_log")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let file_ids: HashSet<String> = jsonl
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                v["event_id"].as_str().unwrap().to_string()
+            })
+            .collect();
+        assert_eq!(
+            db_ids, file_ids,
+            "every originated event_log id must be present in events.jsonl"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_flush_idempotent_no_duplicate_lines() {
+        let dir = temp_farm_dir();
+        let farm = dir.join("farm.db");
+        let snaps = dir.join("snapshots");
+        fs::create_dir_all(&snaps).unwrap();
+
+        let mut conn = db::open_and_migrate(&farm).unwrap();
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_start(&conn, &dir);
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_shutdown(&conn, &dir);
+
+        let path = event_file::events_path(&dir);
+        let before = file_bytes(&path);
+        let before_lines = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .count();
+
+        event_file::on_app_shutdown(&conn, &dir);
+
+        let after = file_bytes(&path);
+        let after_lines = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .count();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before_lines, after_lines);
+        event_file::verify_integrity(&conn, &dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_flush_io_failure_keeps_event_log_for_next_start() {
+        let dir = temp_farm_dir();
+        let farm = dir.join("farm.db");
+        let snaps = dir.join("snapshots");
+        fs::create_dir_all(&snaps).unwrap();
+
+        let mut conn = db::open_and_migrate(&farm).unwrap();
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+        event_file::on_app_start(&conn, &dir);
+        snapshots::try_take_snapshot(&mut conn, &snaps);
+
+        let snap_id: String = conn
+            .query_row(
+                "SELECT id FROM event_log WHERE seq = (SELECT MAX(seq) FROM event_log)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM event_log WHERE id = ?1",
+                [&snap_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "snapshot.taken");
+
+        event_file::force_next_flush_io_failure();
+        event_file::on_app_shutdown(&conn, &dir);
+
+        let status = event_file::read_last_flush_status(&dir);
+        assert!(
+            status.starts_with("aborted"),
+            "expected aborted flush status, got: {status}"
+        );
+        let still: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM event_log WHERE id = ?1 AND kind = 'snapshot.taken'",
+                [&snap_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1, "failed shutdown flush must not remove event_log row");
+
+        // Next start catches up (same contract as command-layer flush failure).
+        event_file::on_app_start(&conn, &dir);
+        let jsonl = fs::read_to_string(event_file::events_path(&dir)).unwrap();
+        assert!(jsonl.contains(&snap_id));
         let _ = fs::remove_dir_all(&dir);
     }
 

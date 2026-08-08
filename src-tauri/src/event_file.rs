@@ -674,3 +674,14 @@ pub fn on_app_start(conn: &Connection, farm_dir: &Path) {
         eprintln!("spine-report.txt write failed: {e}");
     }
 }
+
+/// Shutdown mirror of `on_app_start`.
+///
+/// The close-time snapshot appends to `event_log` after the last command flush of
+/// the session. Without this the newest originated event of every session never
+/// reaches `events.jsonl`, leaving verify-replay permanently at FLUSH LAG 1 and the
+/// export bundle incomplete by BOOKS-BOUNDARY §4. Best-effort, exactly like the
+/// start path: a flush failure is recorded and never takes the app down.
+pub fn on_app_shutdown(conn: &Connection, farm_dir: &Path) {
+    try_flush_after_commit(conn, farm_dir);
+}
