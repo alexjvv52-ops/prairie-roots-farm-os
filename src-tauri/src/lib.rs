@@ -365,6 +365,7 @@ mod tests {
         }
     }
 
+    /// Harvest writes one trays.harvested event (plus planting consumption); one undo restores all.
     #[test]
     fn harvest_trays_writes_one_event_undo_restores() {
         let mut conn = mem();
@@ -375,8 +376,19 @@ mod tests {
             ids.push(t.id);
         }
         let before = trays::count_event_log(&conn).unwrap();
+        let harvested_before = trays::count_event_kind(&conn, "trays.harvested").unwrap();
+        let consumption_before = trays::count_event_kind(&conn, "consumption.physical").unwrap();
         trays::harvest_trays(&mut conn, &ids, 20.0).unwrap();
-        assert_eq!(trays::count_event_log(&conn).unwrap(), before + 1);
+        assert_eq!(
+            trays::count_event_kind(&conn, "trays.harvested").unwrap(),
+            harvested_before + 1,
+            "a multi-tray harvest must remain ONE atomic grow event so one undo reverses it all"
+        );
+        assert_eq!(
+            trays::count_event_kind(&conn, "consumption.physical").unwrap(),
+            consumption_before + 2,
+            "harvest emits one planting consumption record per harvested tray row"
+        );
         assert_eq!(trays::count_event_kind(&conn, "trays.harvested").unwrap(), 1);
 
         for id in &ids {
@@ -474,6 +486,7 @@ mod tests {
         assert_eq!(trays::get_tray(&conn, &id).unwrap().state, "light");
     }
 
+    /// Harvest writes one trays.harvested event (plus planting consumption); one undo restores all.
     #[test]
     fn harvest_groups_three_crops_one_event_undo_restores() {
         let mut conn = mem();
@@ -490,8 +503,19 @@ mod tests {
             });
         }
         let before = trays::count_event_log(&conn).unwrap();
+        let harvested_before = trays::count_event_kind(&conn, "trays.harvested").unwrap();
+        let consumption_before = trays::count_event_kind(&conn, "consumption.physical").unwrap();
         trays::harvest_groups(&mut conn, &groups).unwrap();
-        assert_eq!(trays::count_event_log(&conn).unwrap(), before + 1);
+        assert_eq!(
+            trays::count_event_kind(&conn, "trays.harvested").unwrap(),
+            harvested_before + 1,
+            "a multi-tray harvest must remain ONE atomic grow event so one undo reverses it all"
+        );
+        assert_eq!(
+            trays::count_event_kind(&conn, "consumption.physical").unwrap(),
+            consumption_before + 3,
+            "harvest emits one planting consumption record per harvested tray row"
+        );
         assert_eq!(trays::count_event_kind(&conn, "trays.harvested").unwrap(), 1);
 
         for id in &all_ids {

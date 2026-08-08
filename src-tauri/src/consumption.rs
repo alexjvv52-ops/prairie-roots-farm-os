@@ -94,6 +94,14 @@ pub const TRAY_VARIETY_OR_ITEM: &str = "tray";
 pub const UNIT_TRAY: &str = "tray";
 pub const UNIT_OZ: &str = "oz";
 
+/// Unit for the standing planting retired by a harvest act.
+/// Deliberately NOT `UNIT_TRAY`. BOOKS-BOUNDARY §3: any window measuring physical
+/// quantity per tray takes its tray count from surviving consumption.physical
+/// records with unit = 'tray'. Those records are the trays brought into being at
+/// sow. A harvest record carrying 'tray' would double that denominator silently,
+/// which §3 forbids. Do not "simplify" this back to UNIT_TRAY.
+pub const UNIT_PLANTING: &str = "planting";
+
 #[derive(Debug, Clone)]
 pub struct RecordConsumptionInput {
     pub variety_or_item: String,

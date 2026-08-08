@@ -2,17 +2,18 @@
 
 use crate::consumption::{
     self, validate_consumption_payload, ConsumptionPayload, CONSUMPTION_PAYLOAD_FIELD_NAMES,
-    CONSUMPTION_PAYLOAD_KEYS, FORBIDDEN_MONETARY_KEYS, TRAY_VARIETY_OR_ITEM, UNIT_OZ, UNIT_TRAY,
+    CONSUMPTION_PAYLOAD_KEYS, FORBIDDEN_MONETARY_KEYS, TRAY_VARIETY_OR_ITEM, UNIT_OZ, UNIT_PLANTING,
+    UNIT_TRAY,
 };
 use crate::costs::{self, RecordCostInput};
 use crate::db;
 use crate::event_partition::{EventClass, EventDomain, Kind};
 use crate::events::{self, EventRecord};
-use crate::models::HarvestInput;
+use crate::models::{HarvestInput, RecountEntry};
 use crate::projection;
 use crate::seed_prefill::{self, SeedFieldState};
 use crate::trays;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -125,9 +126,9 @@ fn t1b_null_rate_blank_seed_writes_one_tray_record() {
     assert_eq!(rows[0].3, 2.0);
 }
 
-/// T2 — harvest emits NO consumption; actualYieldOz is never a consumption quantity.
+/// T2 — harvest yield is never a consumption quantity (planting record is separate).
 #[test]
-fn t2_harvest_emits_no_consumption() {
+fn t2_harvest_yield_is_never_a_consumption_quantity() {
     let mut conn = mem();
     let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
     // Advance blackout → light for harvest.
@@ -147,8 +148,8 @@ fn t2_harvest_emits_no_consumption() {
     let after = consumption_rows(&conn);
     assert_eq!(
         after.len(),
-        before,
-        "harvest must not emit any consumption record"
+        before + 1,
+        "harvest emits exactly one planting consumption record"
     );
     for (_id, _v, unit, qty, _) in &after {
         assert!(
@@ -1099,4 +1100,368 @@ fn pass16_rate_edit_leaves_event_log_and_consumption_byte_identical() {
         consumption_after, consumption_before,
         "rate edit must not alter consumption_events"
     );
+}
+
+/// H1 — harvest emits one planting consumption with §3 spine shape.
+#[test]
+fn h1_harvest_emits_one_planting_consumption() {
+    let mut conn = mem();
+    let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    trays::advance_tray(&mut conn, &tray.id).unwrap();
+    let before = consumption_rows(&conn).len();
+
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![tray.id.clone()],
+            actual_yield_oz: 18.5,
+        }],
+    )
+    .unwrap();
+
+    let after = consumption_rows(&conn);
+    assert_eq!(after.len(), before + 1, "exactly one new consumption row");
+    let planting = after
+        .iter()
+        .find(|r| r.2 == UNIT_PLANTING)
+        .expect("planting consumption row");
+    assert_eq!(planting.1, "Dun peas");
+    assert_eq!(planting.2, UNIT_PLANTING);
+    assert_eq!(planting.3, 2.0);
+    assert_eq!(planting.4, "farm_os");
+
+    let (origin, domain, class, kind): (String, String, Option<String>, String) = conn
+        .query_row(
+            "SELECT origin, event_domain, event_class, kind FROM event_log WHERE id = ?1",
+            [&planting.0],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(origin, "farm_os");
+    assert_eq!(domain, "register");
+    assert_eq!(class.as_deref(), Some("physical_consumption"));
+    assert_eq!(kind, Kind::ConsumptionPhysical.as_str());
+
+    let (tier_d, tier_c) = Kind::ConsumptionPhysical.tier();
+    assert_eq!(tier_d, EventDomain::Register);
+    assert_eq!(tier_c, Some(EventClass::PhysicalConsumption));
+}
+
+/// H2 — harvest planting sow_event_id joins tray.sown and the sow tray unit row.
+#[test]
+fn h2_harvest_sow_event_id_joins() {
+    let mut conn = mem();
+    let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    trays::advance_tray(&mut conn, &tray.id).unwrap();
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![tray.id.clone()],
+            actual_yield_oz: 18.5,
+        }],
+    )
+    .unwrap();
+
+    let tray_sown_id: String = conn
+        .query_row(
+            "SELECT id FROM event_log
+             WHERE kind = 'tray.sown' AND entity_id = ?1
+             ORDER BY seq ASC LIMIT 1",
+            [&tray.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let sow_tray_sow_event_id: String = conn
+        .query_row(
+            "SELECT sow_event_id FROM consumption_events
+             WHERE unit = ?1 AND sow_event_id IS NOT NULL
+             ORDER BY event_id ASC LIMIT 1",
+            [UNIT_TRAY],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let planting_sow_event_id: String = conn
+        .query_row(
+            "SELECT sow_event_id FROM consumption_events WHERE unit = ?1",
+            [UNIT_PLANTING],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(planting_sow_event_id, tray_sown_id);
+    assert_eq!(planting_sow_event_id, sow_tray_sow_event_id);
+}
+
+/// H3 — multi-sow harvest group: per-row sowEventId, no cross-attribution.
+#[test]
+fn h3_multi_sow_group_no_cross_attribution() {
+    let mut conn = mem();
+    let a = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    let b = trays::sow_tray(&mut conn, "dun-peas", 3).unwrap();
+    trays::advance_tray(&mut conn, &a.id).unwrap();
+    trays::advance_tray(&mut conn, &b.id).unwrap();
+
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![a.id.clone(), b.id.clone()],
+            actual_yield_oz: 20.0,
+        }],
+    )
+    .unwrap();
+
+    let plantings: Vec<(String, Option<String>, f64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.id, c.sow_event_id, c.quantity
+                 FROM consumption_events c
+                 JOIN event_log e ON e.id = c.event_id
+                 WHERE c.unit = ?1
+                 ORDER BY e.seq ASC",
+            )
+            .unwrap();
+        stmt.query_map([UNIT_PLANTING], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect()
+    };
+    assert_eq!(plantings.len(), 2);
+
+    let sown_a: String = conn
+        .query_row(
+            "SELECT id FROM event_log WHERE kind = 'tray.sown' AND entity_id = ?1",
+            [&a.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let sown_b: String = conn
+        .query_row(
+            "SELECT id FROM event_log WHERE kind = 'tray.sown' AND entity_id = ?1",
+            [&b.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(sown_a, sown_b);
+
+    let ids: HashSet<String> = plantings
+        .iter()
+        .map(|p| p.1.clone().expect("sow_event_id present"))
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&sown_a));
+    assert!(ids.contains(&sown_b));
+
+    let by_sow: HashMap<String, f64> = plantings
+        .into_iter()
+        .map(|(_, sow, qty)| (sow.unwrap(), qty))
+        .collect();
+    assert_eq!(by_sow[&sown_a], 2.0);
+    assert_eq!(by_sow[&sown_b], 3.0);
+}
+
+/// H4 — tray without tray.sown: planting written, sow_event_id NULL, quantity real.
+#[test]
+fn h4_unknown_sow_event_id_is_null_not_zero() {
+    let mut conn = mem();
+    let seeded = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    trays::advance_tray(&mut conn, &seeded.id).unwrap();
+    trays::apply_recount(
+        &mut conn,
+        &[RecountEntry {
+            crop_id: "dun-peas".into(),
+            counted_quantity: 5, // +3 surplus row, no tray.sown
+        }],
+    )
+    .unwrap();
+    let surplus_id: String = conn
+        .query_row(
+            "SELECT id FROM trays
+             WHERE crop_id = 'dun-peas' AND state = 'light' AND id <> ?1",
+            [&seeded.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let surplus = trays::get_tray(&conn, &surplus_id).unwrap();
+    assert_eq!(surplus.quantity, 3);
+    let sown_for_surplus: Option<String> = conn
+        .query_row(
+            "SELECT id FROM event_log
+             WHERE kind = 'tray.sown' AND entity_id = ?1
+             ORDER BY seq ASC LIMIT 1",
+            [&surplus_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert!(sown_for_surplus.is_none());
+
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![surplus_id.clone()],
+            actual_yield_oz: 10.0,
+        }],
+    )
+    .unwrap();
+
+    let (qty, sow_event_id): (f64, Option<String>) = conn
+        .query_row(
+            "SELECT quantity, sow_event_id FROM consumption_events WHERE unit = ?1",
+            [UNIT_PLANTING],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(qty, 3.0);
+    assert!(sow_event_id.is_none());
+    assert!(
+        (qty - 0.0).abs() > f64::EPSILON,
+        "must not write quantity 0.0"
+    );
+}
+
+/// H5 — harvest must not inflate the unit='tray' denominator.
+#[test]
+fn h5_harvest_does_not_change_tray_unit_denominator() {
+    let mut conn = mem();
+    let tray = trays::sow_tray(&mut conn, "dun-peas", 3).unwrap();
+    trays::advance_tray(&mut conn, &tray.id).unwrap();
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![tray.id.clone()],
+            actual_yield_oz: 12.0,
+        }],
+    )
+    .unwrap();
+
+    let tray_sum: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(quantity),0) FROM consumption_events WHERE unit = 'tray'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tray_sum, 3.0);
+}
+
+/// H6 — undo harvest restores tray; consumption rows stay permanent.
+#[test]
+fn h6_undo_harvest_keeps_consumption_records() {
+    let mut conn = mem();
+    let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    trays::advance_tray(&mut conn, &tray.id).unwrap();
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![tray.id.clone()],
+            actual_yield_oz: 18.5,
+        }],
+    )
+    .unwrap();
+
+    let before = dump_consumption_events(&conn);
+    assert!(
+        before.iter().any(|r| r.contains("|planting|")),
+        "fixture must include planting consumption"
+    );
+
+    let undone = trays::undo_last(&mut conn).unwrap().expect("undo target");
+    assert_eq!(undone.undone_kind, "trays.harvested");
+
+    let restored = trays::get_tray(&conn, &tray.id).unwrap();
+    assert_eq!(restored.state, "light");
+    assert!(restored.harvested_on.is_none());
+    assert!(restored.actual_yield_oz.is_none());
+
+    let after = dump_consumption_events(&conn);
+    assert_eq!(after, before, "consumption rows must be byte-identical");
+    let neg_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM consumption_events WHERE quantity <= 0.0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(neg_count, 0, "no compensating or negative consumption row");
+}
+
+/// H7 — harvest planting survives flush + verify_replay (payload self-sufficient).
+#[test]
+fn h7_harvest_spine_round_trip_verify_replay() {
+    let dir = tempfile_dir("h7-spine");
+    let farm = dir.join("farm.db");
+    let mut conn = db::open_and_migrate(&farm).unwrap();
+
+    let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+    trays::advance_tray(&mut conn, &tray.id).unwrap();
+    trays::harvest_groups(
+        &mut conn,
+        &[HarvestInput {
+            tray_ids: vec![tray.id.clone()],
+            actual_yield_oz: 18.5,
+        }],
+    )
+    .unwrap();
+    crate::event_file::try_flush_after_commit(&conn, &dir);
+    drop(conn);
+
+    let jsonl = dir.join("events.jsonl");
+    let outcome = projection::verify_replay_paths(&farm, &jsonl).unwrap();
+    assert!(
+        !outcome.exit_nonzero(),
+        "verify_replay failed: {}",
+        outcome.summary_line()
+    );
+    assert_eq!(outcome.report().flush_lag, 0);
+    assert!(outcome.report().unknown_diffs.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H8 — actualYieldOz never reaches planting quantity; single clock read.
+#[test]
+fn h8_yield_cannot_reach_planting_quantity() {
+    fn harvest_planting_qty_and_times(
+        yield_oz: f64,
+    ) -> (f64, String, String) {
+        let mut conn = mem();
+        let tray = trays::sow_tray(&mut conn, "dun-peas", 2).unwrap();
+        trays::advance_tray(&mut conn, &tray.id).unwrap();
+        trays::harvest_groups(
+            &mut conn,
+            &[HarvestInput {
+                tray_ids: vec![tray.id.clone()],
+                actual_yield_oz: yield_oz,
+            }],
+        )
+        .unwrap();
+        let qty: f64 = conn
+            .query_row(
+                "SELECT quantity FROM consumption_events WHERE unit = ?1",
+                [UNIT_PLANTING],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let planting_occurred: String = conn
+            .query_row(
+                "SELECT occurred_at FROM consumption_events WHERE unit = ?1",
+                [UNIT_PLANTING],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let harvest_created: String = conn
+            .query_row(
+                "SELECT created_at FROM event_log WHERE kind = 'trays.harvested'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (qty, planting_occurred, harvest_created)
+    }
+
+    let (q_a, occ_a, created_a) = harvest_planting_qty_and_times(18.5);
+    let (q_b, occ_b, created_b) = harvest_planting_qty_and_times(3.0);
+    assert_eq!(q_a, q_b);
+    assert_eq!(q_a, 2.0);
+    assert_eq!(occ_a, created_a);
+    assert_eq!(occ_b, created_b);
 }

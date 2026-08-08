@@ -6,7 +6,7 @@ use crate::models::{
     RecountCrop, RecountCropChange, RecountEntry, RecountResult, TodayView, TrayView, UndoResult,
 };
 use crate::projection;
-use rusqlite::{params, Connection, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde_json::{json, Value};
 #[cfg(test)]
 use uuid::Uuid;
@@ -472,6 +472,9 @@ pub fn harvest_groups(conn: &mut Connection, groups: &[HarvestInput]) -> Result<
     struct PlannedTray {
         id: String,
         share: f64,
+        crop_name: String,
+        quantity: i64,
+        sow_event_id: Option<String>,
     }
     struct PlannedGroup {
         tray_ids: Vec<String>,
@@ -498,8 +501,18 @@ pub fn harvest_groups(conn: &mut Connection, groups: &[HarvestInput]) -> Result<
                     t.state
                 ));
             }
+            let sow_event_id: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM event_log
+                     WHERE kind = 'tray.sown' AND entity_id = ?1
+                     ORDER BY seq ASC LIMIT 1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
             total_qty += t.quantity;
-            trays.push((t.id, t.quantity));
+            trays.push((t.id, t.quantity, t.crop_name, sow_event_id));
         }
         if total_qty < 1 {
             return Err("total quantity must be >= 1".to_string());
@@ -507,7 +520,7 @@ pub fn harvest_groups(conn: &mut Connection, groups: &[HarvestInput]) -> Result<
 
         let mut assigned = 0.0;
         let mut planned_trays = Vec::with_capacity(trays.len());
-        for (i, (id, qty)) in trays.iter().enumerate() {
+        for (i, (id, qty, crop_name, sow_event_id)) in trays.iter().enumerate() {
             let share = if i + 1 == trays.len() {
                 (g.actual_yield_oz - assigned).max(0.0)
             } else {
@@ -519,6 +532,9 @@ pub fn harvest_groups(conn: &mut Connection, groups: &[HarvestInput]) -> Result<
             planned_trays.push(PlannedTray {
                 id: id.clone(),
                 share,
+                crop_name: crop_name.clone(),
+                quantity: *qty,
+                sow_event_id: sow_event_id.clone(),
             });
         }
         planned.push(PlannedGroup {
@@ -572,12 +588,30 @@ pub fn harvest_groups(conn: &mut Connection, groups: &[HarvestInput]) -> Result<
         inverse,
         None,
         None,
-        now,
+        now.clone(),
     );
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     projection::apply_event(&tx, &event)?;
     events::insert_event(&tx, &event)?;
+
+    for g in &planned {
+        for t in &g.trays {
+            crate::consumption::insert_consumption_in_tx(
+                &tx,
+                crate::consumption::RecordConsumptionInput {
+                    variety_or_item: t.crop_name.clone(),
+                    unit: crate::consumption::UNIT_PLANTING.to_string(),
+                    quantity: t.quantity as f64,
+                    occurred_at: now.clone(),
+                    sow_event_id: t.sow_event_id.clone(),
+                    linked_cost_event_id: None,
+                    notes: None,
+                },
+            )?;
+        }
+    }
+
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
