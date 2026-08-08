@@ -58,7 +58,10 @@ Quick pointers for reviewers
 - If a PR touches code under the “money-path” boundary (checkout, consumption, inventory, DB schema), it requires operator sign-off and extra scrutiny.
 
 If you want, add this short section to the top of README.md so reviewers arriving from a link or social post can get productive immediately.
+--------------------------------------------------------------------------------------------------------------------------
 
+
+APP DESCRIPTION:
 Free, local-first desktop application for microgreens growers.
 
 **One job only:**  
