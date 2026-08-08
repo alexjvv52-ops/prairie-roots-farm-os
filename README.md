@@ -1,6 +1,63 @@
 ﻿# Prairie Roots Farm OS
  it was designed for windows, its still in development so im updating new work as it progressess
  ask the AI on github to summarize the app for you for quicker understanding
+ ## For reviewers — quick orientation
+
+If you’re doing a first pass review, this is the fastest path to understand what matters and verify changes.
+
+What to open (in order)
+1. src/screens/Today.tsx — the primary UI surface; it shows the app’s main flows and the user actions reviewers should reason about.
+2. src/farm/ (api + types) — business logic and the functions called by the UI (todayView, sowTray, harvestGroups, pollStripe, undoLast, etc.).
+3. src-tauri/src — native/Tauri runtime, Rust commands, and the SQLite persistence. Pay special attention to exported commands (e.g., list_trays) and any code that touches the DB.
+4. checkout-endpoint/ — the stateless worker that creates Stripe Checkout sessions. It’s independent of the core app; tests run locally without secrets.
+5. decisions/README.md — contains the money-path boundary and operator sign-off policy; PRs that change money-path areas must follow that policy.
+
+Minimal smoke checks (fastest local verification)
+- Install JS deps:
+  npm ci
+- Run the frontend (fast feedback):
+  npm run dev
+- Run the full Tauri app (builds Rust, opens desktop app):
+  # if you have @tauri-apps/cli installed
+  npm run tauri
+  # or
+  npx tauri dev
+- Run Rust tests:
+  cd src-tauri
+  cargo test
+- Run the representative replay/verification test:
+  cargo test verify_replay_grow_kinds_reproduce_in_scope -- --nocapture
+- Checkout endpoint unit tests (no secrets required):
+  cd checkout-endpoint
+  node --test
+
+Reviewer checklist (paste into PR description or use when reviewing)
+- Does this PR modify src-tauri/ or the database schema? If yes:
+  - Mark the PR `money-path`.
+  - Add an explicit description of the migration or schema change and link to the decisions/README.md entry.
+  - Obtain operator sign-off before merging (see decisions/README.md).
+- Does this PR change consumption, inventory decrement, or the checkout/payment flow? If yes:
+  - Add tests demonstrating the change and manual QA steps.
+  - Include any necessary end-to-end verification steps.
+- Tests & build:
+  - Rust: `cd src-tauri && cargo test` — all tests must pass.
+  - Frontend: `npm run build` — build should succeed.
+- UI changes:
+  - Include screenshots or a short recording of the changed flow.
+  - Describe user-facing behavior and the expected manual check steps.
+- Secrets & config:
+  - Checkout worker secrets (STRIPE_RESTRICTED_KEY, ALLOWED_ORIGIN, SUCCESS_URL, CANCEL_URL) must never be committed. Document any required secrets in the PR body when relevant.
+- Documentation:
+  - Add or update README/ARCHITECTURE.md if the change affects architecture, data flow, or developer setup.
+  - If you add new exported Rust commands, list them in src-tauri/README or ARCHITECTURE.md.
+- Labels: add one or more of `money-path`, `needs-review`, `docs-needed`, `breaking-change` as appropriate.
+
+Quick pointers for reviewers
+- The UI surface (Today.tsx) is intentionally the place to understand user intent; business logic lives under src/farm/. Focus review effort on src/farm/* and src-tauri/* for correctness, and components/* for accessibility and UX.
+- The checkout-endpoint is stateless and can be tested with `node --test` inside checkout-endpoint/ without secrets.
+- If a PR touches code under the “money-path” boundary (checkout, consumption, inventory, DB schema), it requires operator sign-off and extra scrutiny.
+
+If you want, add this short section to the top of README.md so reviewers arriving from a link or social post can get productive immediately.
 
 Free, local-first desktop application for microgreens growers.
 
