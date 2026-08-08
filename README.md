@@ -61,7 +61,8 @@ Quick pointers for reviewers
 --------------------------------------------------------------------------------------------------------------------------
 
 
---------------APP DESCRIPTION:----------
+--------------APP DESCRIPTION:---------- 
+(insatll directions follow right after) 
 
 Free, local-first desktop application for microgreens growers.
 
