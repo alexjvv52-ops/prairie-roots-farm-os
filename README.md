@@ -1,5 +1,5 @@
 ﻿# Prairie Roots Farm OS
- 
+ it was designed for windows, its still in development so im updating new work as it progressess
 
 Free, local-first desktop application for microgreens growers.
 
