@@ -1,8 +1,9 @@
 [package]
 name = "prairie-roots-farm-os"
+default-run = "prairie-roots-farm-os"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Local-first desktop app for microgreens growers. One SQLite file, no account, no cloud."
+authors = ["alexjvv52-ops"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
