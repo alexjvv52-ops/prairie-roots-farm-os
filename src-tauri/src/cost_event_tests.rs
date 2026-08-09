@@ -1030,3 +1030,88 @@ fn phase2_weight_pad_cost_overlay_preserves_parent() {
         "opening cost must not reset weight pad state"
     );
 }
+
+#[test]
+fn undo_last_never_selects_a_cost_and_reverses_the_real_last_action() {
+    let dir = tempfile_dir("undo-skips-cost");
+    let farm = dir.join("farm.db");
+    let mut conn = db::open_and_migrate(&farm).unwrap();
+
+    let tray = crate::trays::sow_tray(&mut conn, "dun-peas", 1).unwrap();
+    let sow_id: String = conn
+        .query_row(
+            "SELECT id FROM event_log WHERE kind = 'tray.sown' AND entity_id = ?1",
+            [&tray.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let cost = costs::record_cost(&mut conn, &dir, basic_input(1800)).unwrap();
+
+    let undoable = events::newest_undoable(&conn).unwrap().expect("sow");
+    assert_eq!(undoable.kind, "tray.sown");
+    assert_eq!(undoable.id, sow_id);
+
+    let cost_count_before = count_cost_events(&conn);
+    let snapshot_cost_row = |conn: &Connection, event_id: &str| -> String {
+        conn.query_row(
+            "SELECT event_id, origin, date_paid, amount_cents, payee, canonical_category,
+                    schedule_f_line, schedule_c_line, descriptor, quantity, unit_price_cents,
+                    delivery_date, invoice_reference, receipt_file_ref, created_at, updated_at
+             FROM cost_events WHERE event_id = ?1",
+            [event_id],
+            |r| {
+                Ok(format!(
+                    "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<f64>>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, Option<String>>(12)?,
+                    r.get::<_, Option<String>>(13)?,
+                    r.get::<_, String>(14)?,
+                    r.get::<_, String>(15)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let cost_row_before = snapshot_cost_row(&conn, &cost.event_id);
+
+    let result = crate::trays::undo_last(&mut conn).unwrap();
+    assert!(result.is_some());
+    let u = result.unwrap();
+    assert_eq!(u.undone_kind, "tray.sown");
+    assert_ne!(u.undone_kind, "cost.money_out");
+
+    assert_eq!(crate::trays::list_trays(&conn).unwrap().len(), 0);
+
+    let cost_count_after = count_cost_events(&conn);
+    assert_eq!(cost_count_after, cost_count_before);
+    let cost_row_after = snapshot_cost_row(&conn, &cost.event_id);
+    assert_eq!(cost_row_before, cost_row_after);
+
+    let cost_undone: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM event_log
+             WHERE kind = 'cost.money_out' AND undone_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cost_undone, 0);
+
+    // Reported flow: newest log row is a cost; only older undoable is already undone.
+    costs::record_cost(&mut conn, &dir, basic_input(2200)).unwrap();
+    assert!(events::newest_undoable(&conn).unwrap().is_none());
+    assert!(matches!(crate::trays::undo_last(&mut conn), Ok(None)));
+
+    let _ = fs::remove_dir_all(&dir);
+}

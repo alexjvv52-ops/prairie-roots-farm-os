@@ -233,6 +233,9 @@ pub fn newest_undoable(conn: &Connection) -> Result<Option<UndoableEvent>, Strin
     // Mileage / asset / income corrections are made by appending a correction
     // event, not by undo — undoing one locally would leave the projection row
     // standing.
+    // cost.money_out cannot be undone: its inverse is inert and no delete path
+    // for cost_events exists — leaving it eligible meant Undo silently consumed
+    // itself on a cost and left the operator's actual last action in place.
     conn.query_row(
         "SELECT seq, id, kind, inverse FROM event_log
          WHERE undone_at IS NULL
@@ -242,7 +245,7 @@ pub fn newest_undoable(conn: &Connection) -> Result<Option<UndoableEvent>, Strin
            AND kind NOT IN ('mileage.trip','mileage.trip_corrected',
                             'mileage.trip_voided','asset.recorded','asset.corrected',
                             'asset.voided','income.received','income.corrected',
-                            'income.voided')
+                            'income.voided','cost.money_out')
          ORDER BY seq DESC
          LIMIT 1",
         [],
