@@ -38,6 +38,8 @@ mod export_tests;
 mod import_tests;
 #[cfg(test)]
 mod mileage_asset_tests;
+#[cfg(test)]
+mod round_trip_tests;
 
 /// Verify-replay CLI entry (binary links this crate).
 pub use projection::{farm_dir_verify, VerifyOutcome};

@@ -21,7 +21,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -83,6 +83,7 @@ pub struct ImportResult {
     pub events_added: i64,
     pub events_skipped_identical: i64,
     pub foreign_records_added: i64,
+    pub receipts_copied: i64,
 }
 
 /// Preview an import. Takes `&Connection` — writes nothing anywhere.
@@ -103,6 +104,14 @@ pub fn apply_import(
             .cloned()
             .unwrap_or_else(|| "Import refused.".into());
         return Err(msg);
+    }
+
+    // Receipts land before the transaction: a receipt failure must leave the
+    // ledger untouched. A later transaction failure leaves copied files that
+    // are correct on the next attempt.
+    let mut receipts_copied = 0i64;
+    if let Some(farm_dir) = target_farm_dir(conn) {
+        receipts_copied = copy_receipts_into_farm(bundle_dir, &farm_dir)?;
     }
 
     let events_path = bundle_dir.join("events.jsonl");
@@ -136,7 +145,75 @@ pub fn apply_import(
         events_added: to_add.len() as i64,
         events_skipped_identical: skipped,
         foreign_records_added: foreign_added,
+        receipts_copied,
     })
+}
+
+fn target_farm_dir(conn: &Connection) -> Option<PathBuf> {
+    let file: String = conn
+        .query_row(
+            "SELECT file FROM pragma_database_list WHERE name = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if file.is_empty() {
+        return None; // in-memory database — nothing to copy into
+    }
+    Path::new(&file).parent().map(|p| p.to_path_buf())
+}
+
+/// Copy the bundle's receipts into the target farm folder. Additive and
+/// idempotent: a receipt already present with identical bytes is skipped,
+/// so a second import copies nothing. Reads from the bundle, writes only
+/// into the farm folder — the bundle is never touched.
+fn copy_receipts_into_farm(bundle_dir: &Path, farm_dir: &Path) -> Result<i64, String> {
+    let source = bundle_dir.join("receipts");
+    if !source.exists() {
+        return Ok(0);
+    }
+    let dest_dir = farm_dir.join("receipts");
+    fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+
+    let mut copied = 0i64;
+    let entries = fs::read_dir(&source).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("receipt name is not valid UTF-8: {}", path.display()))?
+            .to_string();
+        let dest = dest_dir.join(&name);
+        let src_bytes = fs::read(&path).map_err(|e| e.to_string())?;
+
+        if dest.exists() {
+            let dest_bytes = fs::read(&dest).map_err(|e| e.to_string())?;
+            if dest_bytes == src_bytes {
+                continue;
+            }
+            return Err(format!(
+                "A receipt on this machine does not match the one in the bundle: \
+                 {name}. Nothing was brought in."
+            ));
+        }
+
+        fs::write(&dest, &src_bytes).map_err(|e| e.to_string())?;
+        let written = fs::read(&dest).map_err(|e| e.to_string())?;
+        let src_digest = sha256_hex(&src_bytes);
+        let dest_digest = sha256_hex(&written);
+        if src_digest != dest_digest {
+            return Err(format!(
+                "receipt {name} failed integrity check after copy"
+            ));
+        }
+        copied += 1;
+    }
+    Ok(copied)
 }
 
 fn build_plan(conn: &Connection, bundle_dir: &Path) -> Result<ImportPlan, String> {

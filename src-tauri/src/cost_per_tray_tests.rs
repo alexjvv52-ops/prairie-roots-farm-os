@@ -610,24 +610,27 @@ fn cp10_window_edge_uses_local_calendar_day() {
 #[test]
 fn cp11_nothing_else_in_the_product_reads_the_derivation() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    // Test files are the exception category — the guarantee is that PRODUCTION
-    // code does not read the derivation. import_tests.rs proves foreign records
-    // are excluded from totals and must call the real thing to do it.
-    let allowed_backend: HashSet<&str> = [
+    // The guarantee is that PRODUCTION code does not read the derivation.
+    // Test files are the exception as a CATEGORY, not by name — enumerating
+    // them made this assertion fight every new track that needed to prove
+    // something about the derivation. `_tests.rs` is the same predicate
+    // choke_point_tests::is_test_source already uses to classify test sources.
+    let allowed_production: HashSet<&str> = [
         "cost_per_tray.rs",
         "commands.rs",
         "lib.rs",
-        "cost_per_tray_tests.rs",
-        "import_tests.rs",
     ]
     .into_iter()
     .collect();
 
     walk_rs(&root, &mut |path, src| {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.ends_with("_tests.rs") {
+            return;
+        }
         if src.contains("cost_per_tray") || src.contains("costPerTray") {
             assert!(
-                allowed_backend.contains(name),
+                allowed_production.contains(name),
                 "{} must not mention cost_per_tray / costPerTray",
                 path.display()
             );
