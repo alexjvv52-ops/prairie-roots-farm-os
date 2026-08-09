@@ -826,6 +826,10 @@ export function Today() {
         open={backupOpen}
         onOpenChange={setBackupOpen}
         onRestored={handleRestored}
+        onImported={() => {
+          void refresh();
+          void refreshAttention();
+        }}
       />
 
       <SellOnlineSheet open={sellOpen} onOpenChange={setSellOpen} />

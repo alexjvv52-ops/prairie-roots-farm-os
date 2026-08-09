@@ -610,11 +610,15 @@ fn cp10_window_edge_uses_local_calendar_day() {
 #[test]
 fn cp11_nothing_else_in_the_product_reads_the_derivation() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    // Test files are the exception category — the guarantee is that PRODUCTION
+    // code does not read the derivation. import_tests.rs proves foreign records
+    // are excluded from totals and must call the real thing to do it.
     let allowed_backend: HashSet<&str> = [
         "cost_per_tray.rs",
         "commands.rs",
         "lib.rs",
         "cost_per_tray_tests.rs",
+        "import_tests.rs",
     ]
     .into_iter()
     .collect();

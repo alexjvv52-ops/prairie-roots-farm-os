@@ -9,6 +9,8 @@ import type {
   Crop,
   ExportResult,
   FarmLocation,
+  ImportPlan,
+  ImportResult,
   HarvestGroup,
   HarvestInput,
   MileageTrip,
@@ -192,6 +194,14 @@ export function exportBundle(): Promise<ExportResult> {
 
 export function openExportFolder(path: string): Promise<void> {
   return invoke("open_export_folder", { path });
+}
+
+export function previewImport(bundlePath: string): Promise<ImportPlan> {
+  return invoke("preview_import", { bundlePath });
+}
+
+export function applyImport(bundlePath: string): Promise<ImportResult> {
+  return invoke("apply_import", { bundlePath });
 }
 
 export function recountState(): Promise<RecountCrop[]> {

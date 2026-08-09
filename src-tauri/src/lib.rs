@@ -11,6 +11,7 @@ mod event_file;
 mod event_partition;
 mod events;
 mod export;
+mod import;
 mod mileage;
 mod models;
 mod money;
@@ -33,6 +34,8 @@ mod cost_event_tests;
 mod cost_per_tray_tests;
 #[cfg(test)]
 mod export_tests;
+#[cfg(test)]
+mod import_tests;
 #[cfg(test)]
 mod mileage_asset_tests;
 
@@ -134,6 +137,8 @@ pub fn run() {
                 commands::open_farm_folder,
                 commands::export_bundle,
                 commands::open_export_folder,
+                commands::preview_import,
+                commands::apply_import,
                 commands::recount_state,
                 commands::apply_recount,
                 commands::check_attention,
@@ -194,6 +199,8 @@ pub fn run() {
                 commands::open_farm_folder,
                 commands::export_bundle,
                 commands::open_export_folder,
+                commands::preview_import,
+                commands::apply_import,
                 commands::recount_state,
                 commands::apply_recount,
                 commands::check_attention,

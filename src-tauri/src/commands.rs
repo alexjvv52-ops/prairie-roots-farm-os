@@ -5,6 +5,7 @@ use crate::cost_per_tray::{CostPerTrayOutcome, CostPerTrayRequest};
 use crate::costs::{self, CostEventView, ReceiptSourceInfo, RecordCostInput};
 use crate::db::{Db, FarmPaths};
 use crate::export::{self, ExportResult};
+use crate::import::{self, ImportPlan, ImportResult};
 use crate::mileage::{
     self, CorrectMileageTripInput, MileageTripView, RecordMileageTripInput,
 };
@@ -375,6 +376,26 @@ fn path_is_inside(root: &Path, candidate: &Path) -> bool {
         .canonicalize()
         .unwrap_or_else(|_| candidate.to_path_buf());
     cand_canon.starts_with(&root_canon)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn preview_import(
+    state: State<'_, Db>,
+    bundle_path: String,
+) -> Result<ImportPlan, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    import::preview_import(&conn, Path::new(&bundle_path))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn apply_import(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    bundle_path: String,
+) -> Result<ImportResult, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = import::apply_import(&mut conn, Path::new(&bundle_path));
+    flush_ok(&conn, &paths, result)
 }
 
 #[tauri::command]

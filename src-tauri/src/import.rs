@@ -1,0 +1,719 @@
+//! Import — keyed on event_id, idempotent, refusing (Track 7).
+//!
+//! Authority: ROADMAP Track 7 done-whens; BOOKS-BOUNDARY outranks.
+//! events.jsonl is authoritative. farm.db in the bundle is state and is
+//! verified against the log; where they disagree the import halts and says so.
+//! There is no UPSERT, no ON CONFLICT, no merge and no overwrite anywhere in
+//! this module. A conflict stops the import and is reported to the operator.
+//! Origin is absolute: farm_os records are the grower's own; commercial_app
+//! records arrive marked, are never editable, and are excluded from totals.
+//! Two farms are never combined.
+//! The source bundle is read-only. Nothing is written into it, ever.
+
+use crate::db;
+use crate::event_partition::EventClass;
+use crate::events::{self, EventRecord};
+use crate::export::Manifest;
+use crate::projection::{self, VerifyOutcome};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImportRefusal {
+    MissingEventId {
+        line_no: usize,
+    },
+    FarmOsConflict {
+        event_id: String,
+        field: String,
+        in_this_farm: String,
+        in_the_bundle: String,
+    },
+    CommercialClaimingFarmOs {
+        event_id: String,
+        detail: String,
+    },
+    DifferentFarm {
+        farm_records_here: i64,
+        events_in_bundle: i64,
+    },
+    LogVersusDatabase {
+        detail: String,
+    },
+    ManifestMismatch {
+        path: String,
+        detail: String,
+    },
+    SchemaVersion {
+        bundle: i32,
+        this_app: i32,
+    },
+    Malformed {
+        line_no: usize,
+        detail: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPlan {
+    pub bundle_path: String,
+    pub bundle_exported_at: String,
+    pub events_in_bundle: i64,
+    pub shared_event_ids: i64,
+    pub already_present_identical: i64,
+    pub would_be_added: i64,
+    pub foreign_records_in_bundle: i64,
+    pub refusals: Vec<ImportRefusal>,
+    /// True only when refusals is empty. The UI must not offer Apply otherwise.
+    pub can_apply: bool,
+    /// Generated sentences, one per refusal, in plain operator language.
+    pub explanations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub events_added: i64,
+    pub events_skipped_identical: i64,
+    pub foreign_records_added: i64,
+}
+
+/// Preview an import. Takes `&Connection` — writes nothing anywhere.
+pub fn preview_import(conn: &Connection, bundle_dir: &Path) -> Result<ImportPlan, String> {
+    build_plan(conn, bundle_dir)
+}
+
+/// Apply an import. Re-runs the full preview first; refuses rather than partial.
+pub fn apply_import(
+    conn: &mut Connection,
+    bundle_dir: &Path,
+) -> Result<ImportResult, String> {
+    let plan = build_plan(conn, bundle_dir)?;
+    if !plan.can_apply {
+        let msg = plan
+            .explanations
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Import refused.".into());
+        return Err(msg);
+    }
+
+    let events_path = bundle_dir.join("events.jsonl");
+    let records = parse_bundle_records(&events_path)?;
+    // Re-derive which ids are already present (identical) — only add the rest.
+    let mut to_add: Vec<EventRecord> = Vec::new();
+    let mut skipped = 0i64;
+    let mut foreign_added = 0i64;
+    for rec in records {
+        match lookup_existing(conn, &rec.event_id)? {
+            None => {
+                if rec.origin == "commercial_app" {
+                    foreign_added += 1;
+                }
+                to_add.push(rec);
+            }
+            Some(_) => {
+                skipped += 1;
+            }
+        }
+    }
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for rec in &to_add {
+        projection::apply_event(&tx, rec)?;
+        events::write_event(&tx, rec)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+
+    Ok(ImportResult {
+        events_added: to_add.len() as i64,
+        events_skipped_identical: skipped,
+        foreign_records_added: foreign_added,
+    })
+}
+
+fn build_plan(conn: &Connection, bundle_dir: &Path) -> Result<ImportPlan, String> {
+    let mut refusals: Vec<ImportRefusal> = Vec::new();
+
+    // Step 1 — manifest contract both directions.
+    let manifest = read_manifest(bundle_dir)?;
+    refusals.extend(check_manifest(bundle_dir, &manifest)?);
+
+    // Step 2 — schema version.
+    if manifest.app_schema_version != db::SCHEMA_VERSION {
+        refusals.push(ImportRefusal::SchemaVersion {
+            bundle: manifest.app_schema_version,
+            this_app: db::SCHEMA_VERSION,
+        });
+    }
+
+    // Step 3 — log versus database via the paths form (no status file written
+    // into the bundle directory).
+    let farm_db = bundle_dir.join("farm.db");
+    let events_jsonl = bundle_dir.join("events.jsonl");
+    let mut verify_err: Option<String> = None;
+    match projection::verify_replay_paths(&farm_db, &events_jsonl) {
+        Ok(VerifyOutcome::Pass { .. }) | Ok(VerifyOutcome::PassWithKnown { .. }) => {}
+        Ok(VerifyOutcome::Fail { report }) => {
+            refusals.push(ImportRefusal::LogVersusDatabase {
+                detail: report_summary_detail(&report),
+            });
+        }
+        Err(e) => {
+            verify_err = Some(e);
+        }
+    }
+
+    // Step 4 — parse every line; MissingEventId / Malformed.
+    let text = if events_jsonl.is_file() {
+        fs::read_to_string(&events_jsonl).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let mut records: Vec<EventRecord> = Vec::new();
+    let mut parse_refusals = 0usize;
+    for (idx, line) in text.lines().enumerate() {
+        let line_no = idx + 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                refusals.push(ImportRefusal::Malformed {
+                    line_no,
+                    detail: e.to_string(),
+                });
+                parse_refusals += 1;
+                continue;
+            }
+        };
+
+        // REFUSAL RULE 1 — check event_id explicitly before from_jsonl_value.
+        match v.get("event_id").and_then(|x| x.as_str()) {
+            None => {
+                refusals.push(ImportRefusal::MissingEventId { line_no });
+                parse_refusals += 1;
+                continue;
+            }
+            Some(id) if id.trim().is_empty() => {
+                refusals.push(ImportRefusal::MissingEventId { line_no });
+                parse_refusals += 1;
+                continue;
+            }
+            Some(_) => {}
+        }
+
+        let rec = match EventRecord::from_jsonl_value(&v) {
+            Ok(r) => r,
+            Err(e) => {
+                refusals.push(ImportRefusal::Malformed {
+                    line_no,
+                    detail: e,
+                });
+                parse_refusals += 1;
+                continue;
+            }
+        };
+
+        // Step 5 — REFUSAL RULE 3, origin laundering.
+        if let Some(r) = check_commercial_claiming_farm_os(&rec) {
+            refusals.push(r);
+            parse_refusals += 1;
+            continue;
+        }
+
+        records.push(rec);
+    }
+
+    if let Some(e) = verify_err {
+        if parse_refusals == 0 {
+            refusals.push(ImportRefusal::LogVersusDatabase { detail: e });
+        }
+    }
+
+    // Step 6 — REFUSAL RULE 2 and idempotency.
+    let mut already_present_identical = 0i64;
+    let mut would_be_added = 0i64;
+    let mut conflict_count = 0i64;
+    for rec in &records {
+        match lookup_existing(conn, &rec.event_id)? {
+            None => would_be_added += 1,
+            Some(existing) => match first_conflict_field(&existing, rec) {
+                None => already_present_identical += 1,
+                Some((field, here, bundle)) => {
+                    conflict_count += 1;
+                    refusals.push(ImportRefusal::FarmOsConflict {
+                        event_id: rec.event_id.clone(),
+                        field,
+                        in_this_farm: here,
+                        in_the_bundle: bundle,
+                    });
+                }
+            },
+        }
+    }
+    let shared_event_ids = already_present_identical + conflict_count;
+    let events_in_bundle = count_event_lines(&text);
+
+    // Step 6b — REFUSAL RULE 4, two farms are never combined.
+    // snapshot.taken is excluded: a freshly opened farm already holds launch
+    // snapshots, and counting them would refuse the move-computers case.
+    let farm_records_here: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM event_log WHERE kind <> 'snapshot.taken'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if farm_records_here > 0 && shared_event_ids == 0 {
+        refusals.push(ImportRefusal::DifferentFarm {
+            farm_records_here,
+            events_in_bundle,
+        });
+    }
+
+    // Step 7 — foreign records (legal; not a refusal).
+    let foreign_records_in_bundle = records
+        .iter()
+        .filter(|r| r.origin == "commercial_app")
+        .count() as i64;
+
+    let explanations: Vec<String> = refusals.iter().map(explain_refusal).collect();
+    let can_apply = refusals.is_empty();
+
+    let bundle_path = bundle_dir
+        .to_str()
+        .ok_or_else(|| "bundle path is not valid UTF-8".to_string())?
+        .to_string();
+
+    Ok(ImportPlan {
+        bundle_path,
+        bundle_exported_at: manifest.exported_at,
+        events_in_bundle,
+        shared_event_ids,
+        already_present_identical,
+        would_be_added,
+        foreign_records_in_bundle,
+        refusals,
+        can_apply,
+        explanations,
+    })
+}
+
+fn count_event_lines(text: &str) -> i64 {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .count() as i64
+}
+
+fn read_manifest(bundle_dir: &Path) -> Result<Manifest, String> {
+    let path = bundle_dir.join("manifest.json");
+    let text = fs::read_to_string(&path).map_err(|e| {
+        format!("could not read manifest.json: {e}")
+    })?;
+    serde_json::from_str(&text).map_err(|e| format!("manifest.json is not valid: {e}"))
+}
+
+fn check_manifest(
+    bundle_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<ImportRefusal>, String> {
+    let mut refusals = Vec::new();
+    let mut listed: BTreeSet<String> = BTreeSet::new();
+
+    for entry in &manifest.files {
+        listed.insert(entry.path.clone());
+        let abs = bundle_dir.join(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !abs.is_file() {
+            refusals.push(ImportRefusal::ManifestMismatch {
+                path: entry.path.clone(),
+                detail: "listed in the manifest but missing from the bundle".into(),
+            });
+            continue;
+        }
+        let bytes = fs::read(&abs).map_err(|e| e.to_string())?;
+        if bytes.len() as u64 != entry.size_bytes {
+            refusals.push(ImportRefusal::ManifestMismatch {
+                path: entry.path.clone(),
+                detail: format!(
+                    "size is {} bytes; manifest says {}",
+                    bytes.len(),
+                    entry.size_bytes
+                ),
+            });
+            continue;
+        }
+        let digest = sha256_hex(&bytes);
+        if digest != entry.sha256 {
+            refusals.push(ImportRefusal::ManifestMismatch {
+                path: entry.path.clone(),
+                detail: format!("checksum is {digest}; manifest says {}", entry.sha256),
+            });
+        }
+    }
+
+    // Bundle must not contain files the manifest does not list (manifest.json excepted).
+    for path in walk_bundle_files(bundle_dir) {
+        if path == "manifest.json" {
+            continue;
+        }
+        if !listed.contains(&path) {
+            refusals.push(ImportRefusal::ManifestMismatch {
+                path: path.clone(),
+                detail: "present in the bundle but not listed in the manifest".into(),
+            });
+        }
+    }
+
+    Ok(refusals)
+}
+
+fn walk_bundle_files(bundle_dir: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    fn walk(base: &Path, dir: &Path, out: &mut BTreeSet<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                let s = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.insert(s);
+            }
+        }
+    }
+    walk(bundle_dir, bundle_dir, &mut out);
+    out
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn report_summary_detail(report: &projection::CompareReport) -> String {
+    let summary = if report.flush_lag > 0 {
+        format!(
+            "VERIFY-REPLAY: FAIL — {} event(s) pending flush.",
+            report.flush_lag
+        )
+    } else {
+        "VERIFY-REPLAY: FAIL".to_string()
+    };
+    let mut parts = vec![summary];
+    for d in report.unknown_diffs.iter().take(5) {
+        parts.push(format!(
+            "table={} column={} key={}",
+            d.table, d.field, d.key
+        ));
+    }
+    parts.join("; ")
+}
+
+fn check_commercial_claiming_farm_os(rec: &EventRecord) -> Option<ImportRefusal> {
+    // (a) event_class present but does not parse as EventClass.
+    if let Some(class) = rec.event_class.as_deref() {
+        if EventClass::parse(class).is_err() {
+            return Some(ImportRefusal::CommercialClaimingFarmOs {
+                event_id: rec.event_id.clone(),
+                detail: format!("event_class {class:?} is not a Farm OS class"),
+            });
+        }
+    }
+
+    // (b) record origin farm_os but payload origin copy says commercial_app.
+    if rec.origin == "farm_os" {
+        if let Some(payload_origin) = rec.payload.get("origin").and_then(|x| x.as_str()) {
+            if payload_origin == "commercial_app" {
+                return Some(ImportRefusal::CommercialClaimingFarmOs {
+                    event_id: rec.event_id.clone(),
+                    detail: "the payload origin copy says commercial_app while the record says farm_os".into(),
+                });
+            }
+        }
+    }
+
+    // (c) farm_os sale/payment kind whose payload contains commercial_app as key or string value.
+    if rec.origin == "farm_os" {
+        let kind = rec.kind.as_str();
+        if matches!(
+            kind,
+            "stripe.session_paid"
+                | "stripe.refunded"
+                | "stripe.disputed"
+                | "cost.money_out"
+        ) && payload_mentions_commercial_app(&rec.payload)
+        {
+            return Some(ImportRefusal::CommercialClaimingFarmOs {
+                event_id: rec.event_id.clone(),
+                detail: "a sale or payment payload carries commercial_app".into(),
+            });
+        }
+    }
+
+    None
+}
+
+fn payload_mentions_commercial_app(v: &Value) -> bool {
+    match v {
+        Value::Object(map) => {
+            for (k, val) in map {
+                if k == "commercial_app" {
+                    return true;
+                }
+                if payload_mentions_commercial_app(val) {
+                    return true;
+                }
+            }
+            false
+        }
+        Value::Array(items) => items.iter().any(payload_mentions_commercial_app),
+        Value::String(s) => s == "commercial_app",
+        _ => false,
+    }
+}
+
+struct ExistingRow {
+    kind: String,
+    entity_type: String,
+    entity_id: String,
+    payload: Value,
+    inverse: Value,
+    origin: String,
+    event_domain: String,
+    event_class: Option<String>,
+    reverses_event_id: Option<String>,
+    undoes_seq: Option<i64>,
+    undone_at: Option<String>,
+    created_at: String,
+}
+
+fn lookup_existing(conn: &Connection, event_id: &str) -> Result<Option<ExistingRow>, String> {
+    conn.query_row(
+        "SELECT kind, entity_type, entity_id, payload, inverse, origin,
+                event_domain, event_class, reverses_event_id, undoes_seq,
+                undone_at, created_at
+         FROM event_log WHERE id = ?1",
+        params![event_id],
+        |r| {
+            let payload_s: String = r.get(3)?;
+            let inverse_s: String = r.get(4)?;
+            Ok(ExistingRow {
+                kind: r.get(0)?,
+                entity_type: r.get(1)?,
+                entity_id: r.get(2)?,
+                payload: serde_json::from_str(&payload_s).unwrap_or(Value::String(payload_s)),
+                inverse: serde_json::from_str(&inverse_s).unwrap_or(Value::String(inverse_s)),
+                origin: r.get(5)?,
+                event_domain: r.get(6)?,
+                event_class: r.get(7)?,
+                reverses_event_id: r.get(8)?,
+                undoes_seq: r.get(9)?,
+                undone_at: r.get(10)?,
+                created_at: r.get(11)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+fn first_conflict_field(
+    existing: &ExistingRow,
+    bundle: &EventRecord,
+) -> Option<(String, String, String)> {
+    // Compare these fields: kind, entity_type, entity_id, payload, inverse,
+    // origin, event_domain, event_class, reverses_event_id, undoes_seq,
+    // undone_at, created_at. Do NOT compare seq — it is local ordering.
+    // undone_at is compared deliberately. Importing a bundle, undoing locally,
+    // then re-importing the same bundle is a genuine log-versus-farm
+    // disagreement and must surface rather than be papered over.
+    // Compare payload and inverse as parsed Value so key ordering cannot
+    // manufacture a false conflict.
+    if existing.kind != bundle.kind.as_str() {
+        return Some((
+            "kind".into(),
+            existing.kind.clone(),
+            bundle.kind.as_str().to_string(),
+        ));
+    }
+    if existing.entity_type != bundle.entity_type {
+        return Some((
+            "entity_type".into(),
+            existing.entity_type.clone(),
+            bundle.entity_type.clone(),
+        ));
+    }
+    if existing.entity_id != bundle.entity_id {
+        return Some((
+            "entity_id".into(),
+            existing.entity_id.clone(),
+            bundle.entity_id.clone(),
+        ));
+    }
+    if existing.payload != bundle.payload {
+        return Some((
+            "payload".into(),
+            existing.payload.to_string(),
+            bundle.payload.to_string(),
+        ));
+    }
+    if existing.inverse != bundle.inverse {
+        return Some((
+            "inverse".into(),
+            existing.inverse.to_string(),
+            bundle.inverse.to_string(),
+        ));
+    }
+    if existing.origin != bundle.origin {
+        return Some((
+            "origin".into(),
+            existing.origin.clone(),
+            bundle.origin.clone(),
+        ));
+    }
+    if existing.event_domain != bundle.event_domain {
+        return Some((
+            "event_domain".into(),
+            existing.event_domain.clone(),
+            bundle.event_domain.clone(),
+        ));
+    }
+    if existing.event_class != bundle.event_class {
+        return Some((
+            "event_class".into(),
+            opt_disp(&existing.event_class),
+            opt_disp(&bundle.event_class),
+        ));
+    }
+    if existing.reverses_event_id != bundle.reverses_event_id {
+        return Some((
+            "reverses_event_id".into(),
+            opt_disp(&existing.reverses_event_id),
+            opt_disp(&bundle.reverses_event_id),
+        ));
+    }
+    if existing.undoes_seq != bundle.undoes_seq {
+        return Some((
+            "undoes_seq".into(),
+            opt_i64_disp(existing.undoes_seq),
+            opt_i64_disp(bundle.undoes_seq),
+        ));
+    }
+    if existing.undone_at != bundle.undone_at {
+        return Some((
+            "undone_at".into(),
+            opt_disp(&existing.undone_at),
+            opt_disp(&bundle.undone_at),
+        ));
+    }
+    if existing.created_at != bundle.created_at {
+        return Some((
+            "created_at".into(),
+            existing.created_at.clone(),
+            bundle.created_at.clone(),
+        ));
+    }
+    None
+}
+
+fn opt_disp(v: &Option<String>) -> String {
+    v.clone().unwrap_or_default()
+}
+
+fn opt_i64_disp(v: Option<i64>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_default()
+}
+
+fn parse_bundle_records(events_jsonl: &Path) -> Result<Vec<EventRecord>, String> {
+    let text = fs::read_to_string(events_jsonl).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line)
+            .map_err(|e| format!("events.jsonl line {}: {e}", idx + 1))?;
+        let id = v
+            .get("event_id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim();
+        if id.is_empty() {
+            return Err(format!("events.jsonl line {}: missing event_id", idx + 1));
+        }
+        let rec = EventRecord::from_jsonl_value(&v)?;
+        if check_commercial_claiming_farm_os(&rec).is_some() {
+            return Err(format!(
+                "events.jsonl line {}: commercial claiming farm_os",
+                idx + 1
+            ));
+        }
+        out.push(rec);
+    }
+    Ok(out)
+}
+
+fn explain_refusal(r: &ImportRefusal) -> String {
+    match r {
+        ImportRefusal::MissingEventId { line_no } => format!(
+            "Line {line_no} of the log has no id. Every event needs a stable id \
+             or it cannot be matched, so nothing was brought in."
+        ),
+        ImportRefusal::FarmOsConflict {
+            event_id,
+            field,
+            in_this_farm,
+            in_the_bundle,
+        } => format!(
+            "This farm already has event {event_id}, and the bundle disagrees about \
+             {field}: this farm says {in_this_farm}, the bundle says {in_the_bundle}. \
+             Nothing was changed. Two farms cannot be merged."
+        ),
+        ImportRefusal::CommercialClaimingFarmOs { event_id, detail } => format!(
+            "Event {event_id} is a sale or payment from another system labelled as if \
+             it were yours. {detail}. Nothing was brought in."
+        ),
+        ImportRefusal::DifferentFarm {
+            farm_records_here,
+            events_in_bundle,
+        } => format!(
+            "This looks like a different farm's records. Two farms cannot be merged. \
+             This farm has {farm_records_here} records of its own and shares none of \
+             the {events_in_bundle} events in this bundle. Nothing was brought in."
+        ),
+        ImportRefusal::LogVersusDatabase { detail } => format!(
+            "The bundle's log and its database do not agree. {detail}. \
+             Nothing was brought in."
+        ),
+        ImportRefusal::ManifestMismatch { path, detail } => format!(
+            "The bundle's manifest does not match the file {path}: {detail}. \
+             Nothing was brought in."
+        ),
+        ImportRefusal::SchemaVersion { bundle, this_app } => format!(
+            "This bundle was made for schema version {bundle}, and this app is \
+             schema version {this_app}. Cross-version import is not supported, so \
+             nothing was brought in."
+        ),
+        ImportRefusal::Malformed { line_no, detail } => format!(
+            "Line {line_no} of the log could not be read ({detail}). \
+             Nothing was brought in."
+        ),
+    }
+}

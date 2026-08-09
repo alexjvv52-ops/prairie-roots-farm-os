@@ -253,6 +253,45 @@ export type ExportResult = {
   exportedAt: string;
 };
 
+export type ImportRefusal =
+  | { kind: "missingEventId"; lineNo: number }
+  | {
+      kind: "farmOsConflict";
+      eventId: string;
+      field: string;
+      inThisFarm: string;
+      inTheBundle: string;
+    }
+  | { kind: "commercialClaimingFarmOs"; eventId: string; detail: string }
+  | {
+      kind: "differentFarm";
+      farmRecordsHere: number;
+      eventsInBundle: number;
+    }
+  | { kind: "logVersusDatabase"; detail: string }
+  | { kind: "manifestMismatch"; path: string; detail: string }
+  | { kind: "schemaVersion"; bundle: number; thisApp: number }
+  | { kind: "malformed"; lineNo: number; detail: string };
+
+export type ImportPlan = {
+  bundlePath: string;
+  bundleExportedAt: string;
+  eventsInBundle: number;
+  sharedEventIds: number;
+  alreadyPresentIdentical: number;
+  wouldBeAdded: number;
+  foreignRecordsInBundle: number;
+  refusals: ImportRefusal[];
+  canApply: boolean;
+  explanations: string[];
+};
+
+export type ImportResult = {
+  eventsAdded: number;
+  eventsSkippedIdentical: number;
+  foreignRecordsAdded: number;
+};
+
 export type RecountCrop = {
   cropId: string;
   cropName: string;

@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { ExportResult, FarmLocation, SnapshotInfo } from "@/farm/types";
+import type {
+  ExportResult,
+  FarmLocation,
+  ImportPlan,
+  ImportResult,
+  SnapshotInfo,
+} from "@/farm/types";
 import {
+  applyImport,
   exportBundle,
   farmLocation,
   listSnapshots,
   openExportFolder,
   openFarmFolder,
+  previewImport,
   restoreSnapshot,
 } from "@/farm/api";
 import { snapshotLabel } from "@/farm/dates";
@@ -21,6 +29,7 @@ type FarmBackupSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onRestored: (label: string) => void;
+  onImported?: () => void;
 };
 
 type ConfirmTarget = {
@@ -34,6 +43,7 @@ export function FarmBackupSheet({
   open,
   onOpenChange,
   onRestored,
+  onImported,
 }: FarmBackupSheetProps) {
   const [location, setLocation] = useState<FarmLocation | null>(null);
   const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
@@ -43,6 +53,10 @@ export function FarmBackupSheet({
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [importPlan, setImportPlan] = useState<ImportPlan | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -62,6 +76,10 @@ export function FarmBackupSheet({
     setExportResult(null);
     setExportError(null);
     setExporting(false);
+    setImportPlan(null);
+    setImportResult(null);
+    setImportError(null);
+    setImporting(false);
     void load();
   }, [open]);
 
@@ -72,6 +90,10 @@ export function FarmBackupSheet({
       setExportResult(null);
       setExportError(null);
       setExporting(false);
+      setImportPlan(null);
+      setImportResult(null);
+      setImportError(null);
+      setImporting(false);
     }
     onOpenChange(next);
   }
@@ -141,6 +163,60 @@ export function FarmBackupSheet({
     } catch (err) {
       console.error(err);
       setError("Could not open the file picker.");
+    }
+  }
+
+  async function handleBringInBundle() {
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Bundle manifest", extensions: ["json"] }],
+      });
+      if (selected === null) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path) return;
+      const name = path.split(/[/\\]/).pop() ?? path;
+      if (name !== "manifest.json") {
+        setImportError("Pick the manifest.json inside the bundle folder.");
+        return;
+      }
+      const bundleDir = path.replace(/[/\\][^/\\]+$/, "");
+      const plan = await previewImport(bundleDir);
+      setImportPlan(plan);
+    } catch (err) {
+      const message =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : "Could not read that bundle.";
+      setImportError(message);
+      console.error(err);
+    }
+  }
+
+  async function handleApplyImport() {
+    if (!importPlan || !importPlan.canApply || importing) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const result = await applyImport(importPlan.bundlePath);
+      setImportResult(result);
+      setImportPlan(null);
+      onImported?.();
+    } catch (err) {
+      const message =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : "Import failed.";
+      setImportError(message);
+      console.error(err);
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -303,6 +379,106 @@ export function FarmBackupSheet({
               >
                 I moved computers
               </button>
+              {importPlan ? (
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm">
+                    {importPlan.eventsInBundle} events in this bundle, exported{" "}
+                    {importPlan.bundleExportedAt}
+                  </p>
+                  <p className="text-sm">
+                    {importPlan.sharedEventIds} of them are already in this farm
+                  </p>
+                  <p className="text-sm">
+                    {importPlan.wouldBeAdded} would be added
+                  </p>
+                  {importPlan.foreignRecordsInBundle > 0 && (
+                    <p className="text-sm">
+                      {importPlan.foreignRecordsInBundle} from another system —
+                      these come in marked and are never counted in your totals
+                    </p>
+                  )}
+                  {importPlan.explanations.length > 0 && (
+                    <div className="flex flex-col gap-2" role="alert">
+                      {importPlan.explanations.map((line, i) => (
+                        <p key={i} className="text-sm text-destructive">
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {importPlan.canApply ? (
+                    <div className="flex flex-col gap-3">
+                      <Button
+                        type="button"
+                        className="h-14 text-base"
+                        disabled={importing}
+                        onClick={() => void handleApplyImport()}
+                      >
+                        {importing ? "Bringing in…" : "Bring it in"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-12 text-base"
+                        disabled={importing}
+                        onClick={() => {
+                          setImportPlan(null);
+                          setImportError(null);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-12 text-base"
+                      onClick={() => {
+                        setImportPlan(null);
+                        setImportError(null);
+                      }}
+                    >
+                      Back
+                    </Button>
+                  )}
+                </div>
+              ) : importResult ? (
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm">
+                    Brought in {importResult.eventsAdded} events
+                    {importResult.eventsSkippedIdentical > 0
+                      ? `, skipped ${importResult.eventsSkippedIdentical} already present`
+                      : ""}
+                    {importResult.foreignRecordsAdded > 0
+                      ? `, ${importResult.foreignRecordsAdded} from another system`
+                      : ""}
+                    .
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-12 self-start text-base"
+                    onClick={() => setImportResult(null)}
+                  >
+                    Done
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-12 self-start text-base"
+                  onClick={() => void handleBringInBundle()}
+                >
+                  Bring in a bundle
+                </Button>
+              )}
+              {importError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {importError}
+                </p>
+              )}
               {error && (
                 <p className="text-sm text-destructive">{error}</p>
               )}
