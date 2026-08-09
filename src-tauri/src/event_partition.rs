@@ -2,7 +2,9 @@
 //!
 //! Single source of truth for kinds, tiers, and Phase 2/9 trigger SQL.
 //! Authority: `docs/track-1-inventory.md` § Phase 2 kind partition.
-//! BOOKS-BOUNDARY outranks ROADMAP; the seven register classes are fixed there.
+//! BOOKS-BOUNDARY outranks ROADMAP; the eight register classes are fixed there.
+//! The eighth class (`money_in`) was admitted by an amendment to BOOKS-BOUNDARY
+//! for the money-in track.
 //!
 //! The kind determines the tier. Callers do not choose `event_domain` /
 //! `event_class` — `Kind::tier` is total over every variant.
@@ -40,12 +42,18 @@ pub enum Kind {
     AssetCorrected,
     /// Retires an asset entered in error. Row survives, marked voided.
     AssetVoided,
+    /// Money arrived. Farm OS origin (money-in track).
+    IncomeReceived,
+    /// Full replacement of a record's operator fields.
+    IncomeCorrected,
+    /// Retires a record entered in error. Row survives, marked voided.
+    IncomeVoided,
 }
 
 impl Kind {
     /// Every variant. Used to prove `tier` is total at runtime and to drive
     /// trigger SQL so the database cannot drift from the type system.
-    pub const ALL: [Kind; 21] = [
+    pub const ALL: [Kind; 24] = [
         Kind::TraySown,
         Kind::TraysAdvanced,
         Kind::TraysHarvested,
@@ -67,6 +75,9 @@ impl Kind {
         Kind::AssetRecorded,
         Kind::AssetCorrected,
         Kind::AssetVoided,
+        Kind::IncomeReceived,
+        Kind::IncomeCorrected,
+        Kind::IncomeVoided,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -92,6 +103,9 @@ impl Kind {
             Kind::AssetRecorded => "asset.recorded",
             Kind::AssetCorrected => "asset.corrected",
             Kind::AssetVoided => "asset.voided",
+            Kind::IncomeReceived => "income.received",
+            Kind::IncomeCorrected => "income.corrected",
+            Kind::IncomeVoided => "income.voided",
         }
     }
 
@@ -118,6 +132,9 @@ impl Kind {
             "asset.recorded" => Ok(Kind::AssetRecorded),
             "asset.corrected" => Ok(Kind::AssetCorrected),
             "asset.voided" => Ok(Kind::AssetVoided),
+            "income.received" => Ok(Kind::IncomeReceived),
+            "income.corrected" => Ok(Kind::IncomeCorrected),
+            "income.voided" => Ok(Kind::IncomeVoided),
             other => Err(format!("unknown event kind: {other}")),
         }
     }
@@ -149,6 +166,9 @@ impl Kind {
             Kind::AssetRecorded | Kind::AssetCorrected | Kind::AssetVoided => {
                 (EventDomain::Register, Some(EventClass::AssetRegister))
             }
+            Kind::IncomeReceived | Kind::IncomeCorrected | Kind::IncomeVoided => {
+                (EventDomain::Register, Some(EventClass::MoneyIn))
+            }
         }
     }
 }
@@ -170,7 +190,7 @@ impl EventDomain {
     }
 }
 
-/// The seven register-tier event_class values. Grow rows carry NULL.
+/// The eight register-tier event_class values. Grow rows carry NULL.
 /// Commercial-app classes are not variants — unrepresentable, not rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventClass {
@@ -181,10 +201,12 @@ pub enum EventClass {
     SaleFarmOsPath,
     CapacityCommitment,
     Snapshot,
+    /// Money arriving. The mirror of MoneyOut (money-in track).
+    MoneyIn,
 }
 
 impl EventClass {
-    pub const ALL: [EventClass; 7] = [
+    pub const ALL: [EventClass; 8] = [
         EventClass::MoneyOut,
         EventClass::PhysicalConsumption,
         EventClass::Mileage,
@@ -192,6 +214,7 @@ impl EventClass {
         EventClass::SaleFarmOsPath,
         EventClass::CapacityCommitment,
         EventClass::Snapshot,
+        EventClass::MoneyIn,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -203,6 +226,7 @@ impl EventClass {
             EventClass::SaleFarmOsPath => "sale_farm_os_path",
             EventClass::CapacityCommitment => "capacity_commitment",
             EventClass::Snapshot => "snapshot",
+            EventClass::MoneyIn => "money_in",
         }
     }
 
@@ -215,6 +239,7 @@ impl EventClass {
             "sale_farm_os_path" => Ok(EventClass::SaleFarmOsPath),
             "capacity_commitment" => Ok(EventClass::CapacityCommitment),
             "snapshot" => Ok(EventClass::Snapshot),
+            "money_in" => Ok(EventClass::MoneyIn),
             other => Err(format!("unknown event class: {other}")),
         }
     }
@@ -224,7 +249,7 @@ pub const ORIGINS: &[&str] = &["farm_os", "commercial_app"];
 
 pub const DOMAINS: &[&str] = &["grow", "register"];
 
-/// The seven register-tier event_class string values (for SQL / flush guard).
+/// The eight register-tier event_class string values (for SQL / flush guard).
 pub const EVENT_CLASSES: &[&str] = &[
     EventClass::MoneyOut.as_str(),
     EventClass::PhysicalConsumption.as_str(),
@@ -233,6 +258,7 @@ pub const EVENT_CLASSES: &[&str] = &[
     EventClass::SaleFarmOsPath.as_str(),
     EventClass::CapacityCommitment.as_str(),
     EventClass::Snapshot.as_str(),
+    EventClass::MoneyIn.as_str(),
 ];
 
 /// GROW kind strings — derived from `Kind::tier` so they cannot drift.
@@ -279,6 +305,9 @@ pub const REGISTER_KINDS: &[&str] = &[
     "asset.recorded",
     "asset.corrected",
     "asset.voided",
+    "income.received",
+    "income.corrected",
+    "income.voided",
 ];
 
 /// Register kinds as of schema v10 (before consumption.physical). Frozen for
@@ -304,11 +333,49 @@ pub const REGISTER_KINDS_V12: &[&str] = &[
     "consumption.physical",
 ];
 
+/// Register kinds as of schema v13 (before income / money_in). Frozen for
+/// v13 fixture DBs so migration IN12 can prove the v14 trigger reinstall.
+#[cfg(test)]
+pub const REGISTER_KINDS_V13: &[&str] = &[
+    "stripe.session_paid",
+    "stripe.refunded",
+    "stripe.disputed",
+    "snapshot.taken",
+    "cost.money_out",
+    "consumption.physical",
+    "mileage.trip",
+    "mileage.trip_corrected",
+    "mileage.trip_voided",
+    "asset.recorded",
+    "asset.corrected",
+    "asset.voided",
+];
+
+/// Event classes as of schema v13 (before money_in). Frozen so a v13 fixture
+/// reproduces the old trigger exactly and does not learn about money_in.
+#[cfg(test)]
+pub const EVENT_CLASSES_V13: &[&str] = &[
+    "money_out",
+    "physical_consumption",
+    "mileage",
+    "asset_register",
+    "sale_farm_os_path",
+    "capacity_commitment",
+    "snapshot",
+];
+
 /// v12-era triggers: the five Track 4 residual kinds not yet whitelisted.
 #[cfg(test)]
 pub fn schema_v12_event_log_triggers_sql() -> String {
     let grow = grow_kinds();
-    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V12)
+    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V12, EVENT_CLASSES_V13)
+}
+
+/// v13-era triggers: income kinds and money_in class not yet whitelisted.
+#[cfg(test)]
+pub fn schema_v13_event_log_triggers_sql() -> String {
+    let grow = grow_kinds();
+    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V13, EVENT_CLASSES_V13)
 }
 
 pub fn is_partition_kind(kind: &str) -> bool {
@@ -328,17 +395,19 @@ pub fn sql_string_list(items: &[&str]) -> String {
 pub fn schema_v9_event_log_triggers_sql() -> String {
     let grow = grow_kinds();
     let register = register_kinds();
-    schema_event_log_triggers_sql(&grow, &register)
+    schema_event_log_triggers_sql(&grow, &register, EVENT_CLASSES)
 }
 
-/// Build event_log INSERT/UPDATE/DELETE triggers for the given kind whitelists.
+/// Build event_log INSERT/UPDATE/DELETE triggers for the given kind and class
+/// whitelists.
 pub fn schema_event_log_triggers_sql(
     grow: &[&str],
     register: &[&str],
+    classes: &[&str],
 ) -> String {
     let grow_kinds = sql_string_list(grow);
     let register_kinds = sql_string_list(register);
-    let event_classes = sql_string_list(EVENT_CLASSES);
+    let event_classes = sql_string_list(classes);
     format!(
         r#"
 CREATE TRIGGER IF NOT EXISTS event_log_before_insert
@@ -426,5 +495,5 @@ END;
 #[cfg(test)]
 pub fn schema_v10_event_log_triggers_sql() -> String {
     let grow = grow_kinds();
-    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V10)
+    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V10, EVENT_CLASSES_V13)
 }

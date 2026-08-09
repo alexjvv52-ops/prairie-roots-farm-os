@@ -13,6 +13,8 @@ import type {
   ImportResult,
   HarvestGroup,
   HarvestInput,
+  IncomeCategory,
+  IncomeRecord,
   MileageTrip,
   MoneyStatus,
   NewPaidOrders,
@@ -326,6 +328,56 @@ export function correctAsset(input: {
 
 export function voidAsset(assetId: string): Promise<void> {
   return invoke("void_asset", { assetId });
+}
+
+export function listIncomeCategories(): Promise<IncomeCategory[]> {
+  return invoke("list_income_categories");
+}
+
+export function listIncome(): Promise<IncomeRecord[]> {
+  return invoke("list_income");
+}
+
+export function recordIncome(input: {
+  amountCents: number;
+  source: string;
+  categoryId: string;
+  dateReceived: string;
+  descriptor?: string | null;
+  receiptSourcePath?: string | null;
+}): Promise<IncomeRecord> {
+  return invoke("record_income", {
+    amountCents: input.amountCents,
+    source: input.source,
+    categoryId: input.categoryId,
+    dateReceived: input.dateReceived,
+    descriptor: input.descriptor ?? null,
+    receiptSourcePath: input.receiptSourcePath ?? null,
+  });
+}
+
+export function correctIncome(input: {
+  incomeId: string;
+  amountCents: number;
+  source: string;
+  categoryId: string;
+  dateReceived: string;
+  descriptor?: string | null;
+  receiptSourcePath?: string | null;
+}): Promise<IncomeRecord> {
+  return invoke("correct_income", {
+    incomeId: input.incomeId,
+    amountCents: input.amountCents,
+    source: input.source,
+    categoryId: input.categoryId,
+    dateReceived: input.dateReceived,
+    descriptor: input.descriptor ?? null,
+    receiptSourcePath: input.receiptSourcePath ?? null,
+  });
+}
+
+export function voidIncome(incomeId: string): Promise<void> {
+  return invoke("void_income", { incomeId });
 }
 
 export function costPerTray(input: {

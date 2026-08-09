@@ -11,7 +11,7 @@ pub struct FarmPaths {
     pub snapshots_dir: PathBuf,
 }
 
-pub const SCHEMA_VERSION: i32 = 13;
+pub const SCHEMA_VERSION: i32 = 14;
 
 /// Frozen tray id seeded into `open_v1_in_memory` (Phase 1 Ruling 2).
 #[cfg(test)]
@@ -232,6 +232,58 @@ BEGIN
     WHEN NEW.disposal_date IS NOT NULL
          AND NEW.disposal_date < NEW.placed_in_service_on
       THEN RAISE(ABORT, 'assets.disposal_date before placed_in_service_on')
+  END;
+END;
+"#;
+
+/// Money arriving. Mirrors cost_events, plus the correction columns the
+/// mileage and asset registers use. Computes nothing.
+const SCHEMA_V14_INCOME_EVENTS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS income_events (
+  income_id           TEXT PRIMARY KEY,
+  origin              TEXT NOT NULL CHECK (origin IN ('farm_os','commercial_app')),
+  date_received       TEXT NOT NULL,
+  amount_cents        INTEGER NOT NULL CHECK (amount_cents > 0),
+  source              TEXT NOT NULL CHECK (length(trim(source)) > 0),
+  canonical_category  TEXT NOT NULL,
+  schedule_f_line     TEXT NOT NULL,
+  schedule_c_line     TEXT NOT NULL,
+  descriptor          TEXT NOT NULL DEFAULT '',
+  receipt_file_ref    TEXT,
+  last_event_id       TEXT NOT NULL,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  voided_at           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_income_events_date ON income_events(date_received);
+CREATE TRIGGER IF NOT EXISTS income_events_before_insert
+BEFORE INSERT ON income_events
+BEGIN
+  SELECT CASE
+    WHEN NEW.amount_cents IS NULL OR NEW.amount_cents <= 0
+      THEN RAISE(ABORT, 'income_events.amount_cents must be positive')
+    WHEN NEW.source IS NULL OR trim(NEW.source) = ''
+      THEN RAISE(ABORT, 'income_events.source required')
+    WHEN (instr(lower(NEW.schedule_f_line), 'other') > 0
+          OR instr(lower(NEW.schedule_c_line), 'other') > 0)
+         AND (NEW.descriptor IS NULL OR trim(NEW.descriptor) = '')
+      THEN RAISE(ABORT, 'income_events.descriptor required for other line')
+    WHEN NEW.date_received > date('now', 'localtime')
+      THEN RAISE(ABORT, 'income_events.date_received cannot be future')
+  END;
+END;
+CREATE TRIGGER IF NOT EXISTS income_events_before_update
+BEFORE UPDATE ON income_events
+BEGIN
+  SELECT CASE
+    WHEN NEW.income_id IS NOT OLD.income_id
+      THEN RAISE(ABORT, 'income_events.income_id immutable')
+    WHEN NEW.origin IS NOT OLD.origin
+      THEN RAISE(ABORT, 'income_events.origin immutable')
+    WHEN NEW.created_at IS NOT OLD.created_at
+      THEN RAISE(ABORT, 'income_events.created_at immutable')
+    WHEN NEW.amount_cents IS NULL OR NEW.amount_cents <= 0
+      THEN RAISE(ABORT, 'income_events.amount_cents must be positive')
   END;
 END;
 "#;
@@ -866,6 +918,21 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     if version == 13 && !assets_has_voided_at_column(conn)? {
         conn.execute_batch("ALTER TABLE assets ADD COLUMN voided_at TEXT;")
             .map_err(|e| e.to_string())?;
+    }
+
+    if version < 14 {
+        // Money-in track: income_events + regenerate event_log triggers so the
+        // three income kinds AND the new money_in event class are whitelisted.
+        // Without the reinstall every income write aborts at the database.
+        conn.execute_batch(DROP_EVENT_LOG_TRIGGERS_SQL)
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(&schema_v9_event_log_triggers_sql())
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(SCHEMA_V14_INCOME_EVENTS_SQL)
+            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "user_version", 14)
+            .map_err(|e| e.to_string())?;
+        version = 14;
     }
 
     if version > SCHEMA_VERSION {

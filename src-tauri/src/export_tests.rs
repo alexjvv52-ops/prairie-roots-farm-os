@@ -361,6 +361,7 @@ fn ex1_one_action_produces_the_eight_item_bundle() {
         "events.jsonl",
         "receipts",
         "costs.csv",
+        "income.csv",
         "assets.csv",
         "mileage.csv",
         "categories.json",
@@ -369,13 +370,13 @@ fn ex1_one_action_produces_the_eight_item_bundle() {
     .into_iter()
     .map(str::to_string)
     .collect();
-    assert_eq!(names, expected, "bundle root must be exactly the eight items");
+    assert_eq!(names, expected, "bundle root must be exactly the nine items");
 
     let exported = Connection::open(bundle.join("farm.db")).unwrap();
     let ver: i32 = exported
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(ver, 13);
+    assert_eq!(ver, 14);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -396,6 +397,7 @@ fn ex2_manifest_is_the_contract_both_directions() {
         "manifest files[] must equal bundle files minus manifest.json"
     );
     assert!(listed.contains("costs.csv"));
+    assert!(listed.contains("income.csv"));
 
     for entry in &manifest.files {
         let abs = bundle.join(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -620,6 +622,7 @@ fn ex6_second_export_of_the_same_state_matches() {
     for name in [
         "events.jsonl",
         "costs.csv",
+        "income.csv",
         "assets.csv",
         "mileage.csv",
         "categories.json",
@@ -1040,6 +1043,8 @@ fn ex11_manifest_notes_are_generated() {
         assert!(lower.contains("integer cents"));
         assert!(lower.contains("cost per tray"));
         assert!(lower.contains("miles") && lower.contains("dollar"));
+        assert!(lower.contains("income.csv") && lower.contains("record_type"));
+        assert!(lower.contains("voided income") && lower.contains("refunded or disputed"));
     }
 
     let man_a_json = serde_json::to_string(&man_a).unwrap().to_ascii_lowercase();
@@ -1053,7 +1058,7 @@ fn ex11_manifest_notes_are_generated() {
 
 #[test]
 fn ex12_track_6_adds_no_kind_no_table_no_schema_change() {
-    assert_eq!(Kind::ALL.len(), 21);
+    assert_eq!(Kind::ALL.len(), 24);
     let conn = db::open_in_memory().unwrap();
     let names = table_names(&conn);
     let expected = [
@@ -1064,6 +1069,7 @@ fn ex12_track_6_adds_no_kind_no_table_no_schema_change() {
         "crops",
         "event_log",
         "harvest_links",
+        "income_events",
         "mileage_trips",
         "offers",
         "orders",
@@ -1072,7 +1078,7 @@ fn ex12_track_6_adds_no_kind_no_table_no_schema_change() {
         "stripe_cursor",
         "trays",
     ];
-    assert_eq!(names, expected, "v13 table set must be unchanged by Track 6");
+    assert_eq!(names, expected, "v14 table set must be unchanged by Track 6");
 
     // Keep walk_rs reachable for established-style helper inventory.
     let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");

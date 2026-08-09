@@ -155,6 +155,9 @@ pub fn guard_row(row: &EventLogRow) -> Result<(), String> {
         "asset.recorded",
         "asset.corrected",
         "asset.voided",
+        "income.received",
+        "income.corrected",
+        "income.voided",
     ];
     if IDENTITY_ECHO_KINDS.contains(&row.kind.as_str()) {
         let payload: Value = serde_json::from_str(&row.payload).map_err(|e| {

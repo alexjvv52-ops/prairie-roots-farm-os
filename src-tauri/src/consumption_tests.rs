@@ -635,7 +635,7 @@ fn t8_v10_migrates_to_v11() {
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
     assert!(crops_has_column(&conn, "seed_rate_oz_per_tray"));
 
     let rates: HashMap<String, Option<f64>> = {
@@ -876,7 +876,7 @@ fn pass12_v11_migrates_to_v12_sow_event_id_null_on_prior_rows() {
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
     assert!(consumption_events_has_column(&conn, "sow_event_id"));
 
     let sow_id: Option<String> = conn

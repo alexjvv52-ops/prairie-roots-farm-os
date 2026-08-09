@@ -691,7 +691,7 @@ fn cp11_nothing_else_in_the_product_reads_the_derivation() {
 
 #[test]
 fn cp12_track_5_adds_no_kind_and_no_table() {
-    assert_eq!(Kind::ALL.len(), 21);
+    assert_eq!(Kind::ALL.len(), 24);
 
     let conn = mem();
     let names = table_names(&conn);
@@ -703,6 +703,7 @@ fn cp12_track_5_adds_no_kind_and_no_table() {
         "crops",
         "event_log",
         "harvest_links",
+        "income_events",
         "mileage_trips",
         "offers",
         "orders",
@@ -714,7 +715,7 @@ fn cp12_track_5_adds_no_kind_and_no_table() {
     assert_eq!(
         names,
         expected,
-        "v13 table set must be unchanged by Track 5"
+        "v14 table set must be unchanged by Track 5"
     );
 }
 
@@ -781,7 +782,7 @@ fn cp13_verify_replay_unaffected() {
     );
     let report = outcome.report();
     assert_eq!(report.flush_lag, 0);
-    assert_eq!(report.tables_compared, 7);
+    assert_eq!(report.tables_compared, 8);
 
     let _ = fs::remove_dir_all(&dir);
 }

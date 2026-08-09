@@ -203,3 +203,112 @@ pub fn export_categories() -> Vec<CostCategoryExport> {
         })
         .collect()
 }
+
+/// One controlled income category. Same shape as cost categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncomeCategory {
+    /// Stable id stored on the income event (`canonical_category`).
+    pub id: &'static str,
+    /// Plain-language name the operator picks.
+    pub name: &'static str,
+    /// Schedule F line (or "8 other").
+    pub schedule_f_line: &'static str,
+    /// Schedule C line (or "6 other").
+    pub schedule_c_line: &'static str,
+    /// Mandatory free-text when either mapping is an "other" line.
+    pub descriptor_required: bool,
+}
+
+/// The closed list. Order is display order. Six categories — invent no seventh.
+pub const INCOME_CATEGORIES: &[IncomeCategory] = &[
+    IncomeCategory {
+        id: "produce_you_grew",
+        name: "Produce you grew",
+        schedule_f_line: "2",
+        schedule_c_line: "1",
+        descriptor_required: false,
+    },
+    IncomeCategory {
+        id: "resold_goods",
+        name: "Goods you bought to resell",
+        schedule_f_line: "1b",
+        schedule_c_line: "1",
+        descriptor_required: false,
+    },
+    IncomeCategory {
+        id: "custom_work",
+        name: "Custom work or hire",
+        schedule_f_line: "7",
+        schedule_c_line: "1",
+        descriptor_required: false,
+    },
+    IncomeCategory {
+        id: "program_payment",
+        name: "Agricultural program payment",
+        schedule_f_line: "4b",
+        schedule_c_line: "6 other",
+        descriptor_required: true,
+    },
+    IncomeCategory {
+        id: "crop_insurance",
+        name: "Crop insurance or disaster payment",
+        schedule_f_line: "6a",
+        schedule_c_line: "6 other",
+        descriptor_required: true,
+    },
+    IncomeCategory {
+        id: "other_farm_income",
+        name: "Other farm income",
+        schedule_f_line: "8 other",
+        schedule_c_line: "6 other",
+        descriptor_required: true,
+    },
+];
+
+pub fn find_income_category(id: &str) -> Option<&'static IncomeCategory> {
+    INCOME_CATEGORIES.iter().find(|c| c.id == id)
+}
+
+/// Operator-facing view — no Schedule F/C line numbers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncomeCategoryView {
+    pub id: String,
+    pub name: String,
+    pub descriptor_required: bool,
+}
+
+pub fn list_income_categories() -> Vec<IncomeCategoryView> {
+    INCOME_CATEGORIES
+        .iter()
+        .map(|c| IncomeCategoryView {
+            id: c.id.to_string(),
+            name: c.name.to_string(),
+            descriptor_required: c.descriptor_required,
+        })
+        .collect()
+}
+
+/// Full serialisable record for export — not shown in UI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncomeCategoryExport {
+    pub id: String,
+    pub name: String,
+    pub schedule_f_line: String,
+    pub schedule_c_line: String,
+    pub descriptor_required: bool,
+}
+
+pub fn export_income_categories() -> Vec<IncomeCategoryExport> {
+    INCOME_CATEGORIES
+        .iter()
+        .map(|c| IncomeCategoryExport {
+            id: c.id.to_string(),
+            name: c.name.to_string(),
+            schedule_f_line: c.schedule_f_line.to_string(),
+            schedule_c_line: c.schedule_c_line.to_string(),
+            descriptor_required: c.descriptor_required,
+        })
+        .collect()
+}

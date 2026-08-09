@@ -185,6 +185,27 @@ export type Asset = {
   updatedAt: string;
 };
 
+export type IncomeCategory = {
+  id: string;
+  name: string;
+  descriptorRequired: boolean;
+};
+
+/** Money-in register row — amount, source, category, date. Nothing computed. */
+export type IncomeRecord = {
+  incomeId: string;
+  origin: string;
+  dateReceived: string;
+  amountCents: number;
+  source: string;
+  canonicalCategory: string;
+  descriptor: string;
+  receiptFileRef: string | null;
+  lastEventId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type IncludedPayment = {
   eventId: string;
   datePaid: string;

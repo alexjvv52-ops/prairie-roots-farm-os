@@ -250,6 +250,7 @@ pub fn verify_replay(
     compare_consumption_events(&snap, &replay, &mut report)?;
     compare_mileage_trips(&snap, &replay, &mut report)?;
     compare_assets(&snap, &replay, &mut report)?;
+    compare_income_events(&snap, &replay, &mut report)?;
     // attention is outside the replay ledger — not compared (see EXCLUSION_LIST).
 
     let outcome = decide_outcome(report);
@@ -521,6 +522,15 @@ fn compare_assets(
 ) -> Result<(), String> {
     let cols = crate::assets::ASSETS_COLUMNS;
     compare_keyed(snap, replay, "assets", "asset_id", cols, report)
+}
+
+fn compare_income_events(
+    snap: &Connection,
+    replay: &Connection,
+    report: &mut CompareReport,
+) -> Result<(), String> {
+    let cols = crate::income::INCOME_EVENTS_COLUMNS;
+    compare_keyed(snap, replay, "income_events", "income_id", cols, report)
 }
 
 fn compare_keyed(

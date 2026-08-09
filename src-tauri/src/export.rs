@@ -37,6 +37,10 @@ pub struct ManifestCounts {
     pub mileage_trips_excluded_voided: i64,
     pub assets: i64,
     pub assets_excluded_voided: i64,
+    pub income_events: i64,
+    pub income_events_excluded_voided: i64,
+    pub stripe_orders_paid: i64,
+    pub stripe_orders_excluded_not_paid: i64,
     pub receipts: i64,
 }
 
@@ -151,6 +155,10 @@ fn write_bundle(
     let cost_rows = write_costs_csv(conn, bundle_dir)?;
     files.push(manifest_file_for_path(bundle_dir, Path::new("costs.csv"))?);
 
+    // income.csv — recorded farm_os income plus paid Stripe orders
+    let income_export = write_income_csv(conn, bundle_dir)?;
+    files.push(manifest_file_for_path(bundle_dir, Path::new("income.csv"))?);
+
     // assets.csv — live farm_os only
     let (asset_rows, assets_excluded_voided) = write_assets_csv(conn, bundle_dir)?;
     files.push(manifest_file_for_path(bundle_dir, Path::new("assets.csv"))?);
@@ -193,6 +201,10 @@ fn write_bundle(
         mileage_trips_excluded_voided: mileage_excluded_voided,
         assets: asset_rows,
         assets_excluded_voided,
+        income_events: income_export.recorded_rows,
+        income_events_excluded_voided: income_export.excluded_voided,
+        stripe_orders_paid: income_export.stripe_paid_rows,
+        stripe_orders_excluded_not_paid: income_export.excluded_not_paid,
         receipts: receipts_count,
     };
 
@@ -255,6 +267,15 @@ fn build_notes(counts: &ManifestCounts) -> Vec<String> {
             counts.mileage_trips_excluded_voided, counts.assets_excluded_voided
         ),
         format!("this bundle contains only farm_os originated records"),
+        format!(
+            "income.csv carries both manually recorded income and paid Stripe orders, \
+             distinguished by record_type, so no dollar is counted twice"
+        ),
+        format!(
+            "{} voided income records and {} refunded or disputed Stripe orders were \
+             excluded from income.csv; the full history remains in events.jsonl",
+            counts.income_events_excluded_voided, counts.stripe_orders_excluded_not_paid
+        ),
     ]
 }
 
@@ -384,6 +405,148 @@ fn copy_receipts(
         count += 1;
     }
     Ok(count)
+}
+
+struct IncomeCsvCounts {
+    recorded_rows: i64,
+    excluded_voided: i64,
+    stripe_paid_rows: i64,
+    excluded_not_paid: i64,
+}
+
+fn write_income_csv(conn: &Connection, bundle_dir: &Path) -> Result<IncomeCsvCounts, String> {
+    let produce = categories::find_income_category("produce_you_grew")
+        .ok_or_else(|| "produce_you_grew income category missing".to_string())?;
+
+    let excluded_voided: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM income_events
+             WHERE origin = 'farm_os' AND voided_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let excluded_not_paid: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM orders WHERE state <> 'paid'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    #[derive(Clone)]
+    struct IncomeRow {
+        record_type: String,
+        income_id: String,
+        date_received: String,
+        amount_cents: i64,
+        source: String,
+        canonical_category: String,
+        schedule_f_line: String,
+        schedule_c_line: String,
+        descriptor: String,
+        receipt_file_ref: String,
+    }
+
+    let mut rows: Vec<IncomeRow> = Vec::new();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT income_id, date_received, amount_cents, source, canonical_category,
+                    schedule_f_line, schedule_c_line, descriptor, receipt_file_ref
+             FROM income_events
+             WHERE origin = 'farm_os' AND voided_at IS NULL",
+        )
+        .map_err(|e| e.to_string())?;
+    let recorded = stmt
+        .query_map([], |r| {
+            Ok(IncomeRow {
+                record_type: "recorded".into(),
+                income_id: r.get(0)?,
+                date_received: r.get(1)?,
+                amount_cents: r.get(2)?,
+                source: r.get(3)?,
+                canonical_category: r.get(4)?,
+                schedule_f_line: r.get(5)?,
+                schedule_c_line: r.get(6)?,
+                descriptor: r.get(7)?,
+                receipt_file_ref: r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    for row in recorded {
+        rows.push(row.map_err(|e| e.to_string())?);
+    }
+    let recorded_rows = rows.len() as i64;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.id, o.paid_at, o.amount_cents, c.name
+             FROM orders o
+             JOIN crops c ON c.id = o.crop_id
+             WHERE o.state = 'paid'",
+        )
+        .map_err(|e| e.to_string())?;
+    let stripe = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut stripe_paid_rows = 0i64;
+    for row in stripe {
+        let (id, paid_at, amount_cents, crop_name) = row.map_err(|e| e.to_string())?;
+        let date_received = db::local_date_from_utc_rfc3339(&paid_at)?;
+        rows.push(IncomeRow {
+            record_type: "stripe".into(),
+            income_id: id,
+            date_received,
+            amount_cents,
+            source: format!("Online order — {crop_name}"),
+            canonical_category: produce.id.to_string(),
+            schedule_f_line: produce.schedule_f_line.to_string(),
+            schedule_c_line: produce.schedule_c_line.to_string(),
+            descriptor: String::new(),
+            receipt_file_ref: String::new(),
+        });
+        stripe_paid_rows += 1;
+    }
+
+    rows.sort_by(|a, b| {
+        (&a.date_received, &a.income_id).cmp(&(&b.date_received, &b.income_id))
+    });
+
+    let mut out = String::new();
+    out.push_str(
+        "record_type,income_id,date_received,amount_cents,source,canonical_category,schedule_f_line,schedule_c_line,descriptor,receipt_file_ref\n",
+    );
+    for row in &rows {
+        out.push_str(&csv_line(&[
+            CsvField::Text(&row.record_type),
+            CsvField::Text(&row.income_id),
+            CsvField::Text(&row.date_received),
+            CsvField::Int(row.amount_cents),
+            CsvField::Text(&row.source),
+            CsvField::Text(&row.canonical_category),
+            CsvField::Text(&row.schedule_f_line),
+            CsvField::Text(&row.schedule_c_line),
+            CsvField::Text(&row.descriptor),
+            CsvField::Text(&row.receipt_file_ref),
+        ]));
+    }
+    fs::write(bundle_dir.join("income.csv"), out.as_bytes()).map_err(|e| e.to_string())?;
+
+    Ok(IncomeCsvCounts {
+        recorded_rows,
+        excluded_voided,
+        stripe_paid_rows,
+        excluded_not_paid,
+    })
 }
 
 fn write_costs_csv(conn: &Connection, bundle_dir: &Path) -> Result<i64, String> {

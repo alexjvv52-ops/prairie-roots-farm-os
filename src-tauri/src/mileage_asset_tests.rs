@@ -1356,7 +1356,7 @@ fn s1_v12_migrates_to_v13() {
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
     assert!(table_exists(&conn, "mileage_trips"));
     assert!(table_exists(&conn, "assets"));
 
@@ -1575,7 +1575,7 @@ fn s3_spine_round_trip_verify_replay_covers_new_tables() {
     );
     let report = outcome.report();
     assert_eq!(report.flush_lag, 0);
-    assert_eq!(report.tables_compared, 7);
+    assert_eq!(report.tables_compared, 8);
 
     // Live DB still holds both asset rows; verify-replay compared voided_at via
     // ASSETS_COLUMNS, so a clean pass reproduces the voided row on rebuild.
@@ -1675,7 +1675,7 @@ fn s5_existing_track4_core_path_unchanged() {
     assert_eq!(grow, GROW_KINDS.to_vec());
 
     let register = register_kinds();
-    assert_eq!(register.len(), 12);
+    assert_eq!(register.len(), 15);
     assert_eq!(register, REGISTER_KINDS.to_vec());
 
     let conn = mem();

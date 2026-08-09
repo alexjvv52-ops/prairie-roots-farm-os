@@ -644,7 +644,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Cost payload key set unchanged across the Track 4 schema bump.
 #[test]
 fn phase2_schema_version_10_payload_keys_unchanged() {
-    assert_eq!(db::SCHEMA_VERSION, 13);
+    assert_eq!(db::SCHEMA_VERSION, 14);
     let expected = [
         "eventId",
         "origin",

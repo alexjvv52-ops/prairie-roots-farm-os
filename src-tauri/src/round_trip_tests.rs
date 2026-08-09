@@ -10,6 +10,7 @@ use crate::event_file;
 use crate::events::Kind;
 use crate::export;
 use crate::import;
+use crate::income::{self, CorrectIncomeInput, RecordIncomeInput, INCOME_EVENTS_COLUMNS};
 use crate::mileage::{self, CorrectMileageTripInput, RecordMileageTripInput, MILEAGE_TRIPS_COLUMNS};
 use crate::models::RecountEntry;
 use crate::snapshots;
@@ -201,6 +202,7 @@ fn assert_fixture_richness(conn: &Connection) {
     assert!(row_count(conn, "consumption_events") > 0);
     assert!(row_count(conn, "mileage_trips") > 0);
     assert!(row_count(conn, "assets") > 0);
+    assert!(row_count(conn, "income_events") > 0);
     assert!(row_count(conn, "trays") > 0);
 }
 
@@ -363,6 +365,49 @@ fn build_source_farm(dir: &Path) -> Connection {
     .unwrap();
     assets::void_asset(&mut conn, &asset_void.asset_id).unwrap();
 
+    // Two income records: one corrected, one voided.
+    let income_keep = income::record_income(
+        &mut conn,
+        dir,
+        RecordIncomeInput {
+            amount_cents: 3500,
+            source: "Saturday market".into(),
+            category_id: "produce_you_grew".into(),
+            date_received: day.clone(),
+            descriptor: None,
+            receipt_source_path: None,
+        },
+    )
+    .unwrap();
+    income::correct_income(
+        &mut conn,
+        dir,
+        CorrectIncomeInput {
+            income_id: income_keep.income_id,
+            amount_cents: 3600,
+            source: "Saturday market".into(),
+            category_id: "produce_you_grew".into(),
+            date_received: day.clone(),
+            descriptor: None,
+            receipt_source_path: None,
+        },
+    )
+    .unwrap();
+    let income_void = income::record_income(
+        &mut conn,
+        dir,
+        RecordIncomeInput {
+            amount_cents: 200,
+            source: "Mistake".into(),
+            category_id: "other_farm_income".into(),
+            date_received: day.clone(),
+            descriptor: Some("entered wrong".into()),
+            receipt_source_path: None,
+        },
+    )
+    .unwrap();
+    income::void_income(&mut conn, &income_void.income_id).unwrap();
+
     // Attention resolved (handler-originated).
     attention::raise(
         &conn,
@@ -437,6 +482,10 @@ fn assert_projection_tables_equal(a: &Connection, b: &Connection) {
     assert_eq!(
         dump_table(a, "assets", ASSETS_COLUMNS),
         dump_table(b, "assets", ASSETS_COLUMNS)
+    );
+    assert_eq!(
+        dump_table(a, "income_events", INCOME_EVENTS_COLUMNS),
+        dump_table(b, "income_events", INCOME_EVENTS_COLUMNS)
     );
 
     let orders_cols: Vec<String> = table_columns(a, "orders");

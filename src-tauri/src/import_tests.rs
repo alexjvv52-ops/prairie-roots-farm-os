@@ -1041,7 +1041,7 @@ fn im11_schema_version_mismatch_refuses_both_directions() {
     let (target_dir, mut conn) = empty_target("im11-tgt");
     let before = snapshot_target(&conn, &target_dir);
 
-    for ver in [12i32, 14] {
+    for ver in [12i32, 15] {
         let man_path = bundle.join("manifest.json");
         let mut man: Manifest =
             serde_json::from_str(&fs::read_to_string(&man_path).unwrap()).unwrap();
@@ -1058,10 +1058,10 @@ fn im11_schema_version_mismatch_refuses_both_directions() {
         assert!(plan.refusals.iter().any(|r| matches!(
             r,
             ImportRefusal::SchemaVersion { bundle: b, this_app: t }
-            if *b == ver && *t == 13
+            if *b == ver && *t == 14
         )));
         let expl = plan.explanations.join(" ");
-        assert!(expl.contains(&ver.to_string()) && expl.contains("13"));
+        assert!(expl.contains(&ver.to_string()) && expl.contains("14"));
         assert!(import::apply_import(&mut conn, &bundle).is_err());
         assert_target_unchanged(&conn, &target_dir, &before);
     }
@@ -1152,7 +1152,7 @@ fn im12_refusal_different_farm_and_the_snapshot_only_exception() {
 
 #[test]
 fn im13_track_7_adds_no_kind_no_table_no_schema_change() {
-    assert_eq!(Kind::ALL.len(), 21);
+    assert_eq!(Kind::ALL.len(), 24);
     let conn = db::open_in_memory().unwrap();
     let names = table_names(&conn);
     let expected = [
@@ -1163,6 +1163,7 @@ fn im13_track_7_adds_no_kind_no_table_no_schema_change() {
         "crops",
         "event_log",
         "harvest_links",
+        "income_events",
         "mileage_trips",
         "offers",
         "orders",
@@ -1171,6 +1172,6 @@ fn im13_track_7_adds_no_kind_no_table_no_schema_change() {
         "stripe_cursor",
         "trays",
     ];
-    assert_eq!(names, expected, "v13 table set must be unchanged by Track 7");
+    assert_eq!(names, expected, "v14 table set must be unchanged by Track 7");
     let _ = BTreeSet::<String>::new();
 }

@@ -1,11 +1,12 @@
 use crate::assets::{self, AssetView, CorrectAssetInput, RecordAssetInput};
 use crate::attention;
-use crate::categories::{self, CostCategoryView};
+use crate::categories::{self, CostCategoryView, IncomeCategoryView};
 use crate::cost_per_tray::{CostPerTrayOutcome, CostPerTrayRequest};
 use crate::costs::{self, CostEventView, ReceiptSourceInfo, RecordCostInput};
 use crate::db::{Db, FarmPaths};
 use crate::export::{self, ExportResult};
 use crate::import::{self, ImportPlan, ImportResult};
+use crate::income::{self, CorrectIncomeInput, IncomeView, RecordIncomeInput};
 use crate::mileage::{
     self, CorrectMileageTripInput, MileageTripView, RecordMileageTripInput,
 };
@@ -645,5 +646,83 @@ pub fn void_asset(
 ) -> Result<(), String> {
     let mut conn = state.0.lock().map_err(|e| e.to_string())?;
     let result = assets::void_asset(&mut conn, &asset_id);
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command]
+pub fn list_income_categories() -> Result<Vec<IncomeCategoryView>, String> {
+    Ok(categories::list_income_categories())
+}
+
+#[tauri::command]
+pub fn list_income(state: State<'_, Db>) -> Result<Vec<IncomeView>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    income::list_income(&conn)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn record_income(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    amount_cents: i64,
+    source: String,
+    category_id: String,
+    date_received: String,
+    descriptor: Option<String>,
+    receipt_source_path: Option<String>,
+) -> Result<IncomeView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = income::record_income(
+        &mut conn,
+        &paths.folder_path,
+        RecordIncomeInput {
+            amount_cents,
+            source,
+            category_id,
+            date_received,
+            descriptor,
+            receipt_source_path,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn correct_income(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    income_id: String,
+    amount_cents: i64,
+    source: String,
+    category_id: String,
+    date_received: String,
+    descriptor: Option<String>,
+    receipt_source_path: Option<String>,
+) -> Result<IncomeView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = income::correct_income(
+        &mut conn,
+        &paths.folder_path,
+        CorrectIncomeInput {
+            income_id,
+            amount_cents,
+            source,
+            category_id,
+            date_received,
+            descriptor,
+            receipt_source_path,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn void_income(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    income_id: String,
+) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = income::void_income(&mut conn, &income_id);
     flush_ok(&conn, &paths, result)
 }

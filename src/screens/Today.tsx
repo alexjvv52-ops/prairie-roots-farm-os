@@ -33,6 +33,7 @@ import {
 } from "@/components/RecountSheet";
 import { SellOnlineSheet } from "@/components/SellOnlineSheet";
 import { MoneyJustLeftSheet } from "@/components/MoneyJustLeftSheet";
+import { MoneyCameInSheet } from "@/components/MoneyCameInSheet";
 import { SeedRatesSheet } from "@/components/SeedRatesSheet";
 import { MilesSheet } from "@/components/MilesSheet";
 import { EquipmentSheet } from "@/components/EquipmentSheet";
@@ -79,6 +80,7 @@ export function Today() {
   const [sellOpen, setSellOpen] = useState(false);
   const [seedRatesOpen, setSeedRatesOpen] = useState(false);
   const [moneyLeftOpen, setMoneyLeftOpen] = useState(false);
+  const [moneyInOpen, setMoneyInOpen] = useState(false);
   const [deliveryCostOpen, setDeliveryCostOpen] = useState(false);
   const [milesOpen, setMilesOpen] = useState(false);
   const [equipmentOpen, setEquipmentOpen] = useState(false);
@@ -493,6 +495,13 @@ export function Today() {
               </button>
               <button
                 type="button"
+                onClick={() => setMoneyInOpen(true)}
+                className="flex min-h-14 items-center justify-center rounded-xl border px-4 text-base font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Money came in
+              </button>
+              <button
+                type="button"
                 onClick={() => setSeedRatesOpen(true)}
                 className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
@@ -739,6 +748,13 @@ export function Today() {
               >
                 Money just left
               </button>
+              <button
+                type="button"
+                onClick={() => setMoneyInOpen(true)}
+                className="flex min-h-14 items-center justify-center rounded-xl border px-4 text-base font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Money came in
+              </button>
 
               {view.activeTrayCount > 0 && (
                 <button
@@ -846,6 +862,11 @@ export function Today() {
         open={moneyLeftOpen}
         onOpenChange={setMoneyLeftOpen}
         moment="money_just_left"
+      />
+
+      <MoneyCameInSheet
+        open={moneyInOpen}
+        onOpenChange={setMoneyInOpen}
       />
 
       <MoneyJustLeftSheet

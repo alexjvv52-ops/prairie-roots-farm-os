@@ -12,6 +12,7 @@ mod event_partition;
 mod events;
 mod export;
 mod import;
+mod income;
 mod mileage;
 mod models;
 mod money;
@@ -36,6 +37,8 @@ mod cost_per_tray_tests;
 mod export_tests;
 #[cfg(test)]
 mod import_tests;
+#[cfg(test)]
+mod income_tests;
 #[cfg(test)]
 mod mileage_asset_tests;
 #[cfg(test)]
@@ -158,6 +161,11 @@ pub fn run() {
                 commands::record_asset,
                 commands::correct_asset,
                 commands::void_asset,
+                commands::list_income_categories,
+                commands::list_income,
+                commands::record_income,
+                commands::correct_income,
+                commands::void_income,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
@@ -220,6 +228,11 @@ pub fn run() {
                 commands::record_asset,
                 commands::correct_asset,
                 commands::void_asset,
+                commands::list_income_categories,
+                commands::list_income,
+                commands::record_income,
+                commands::correct_income,
+                commands::void_income,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
@@ -1347,7 +1360,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         let still = trays::get_tray(&conn, &tray.id).unwrap();
         assert_eq!(still.quantity, 3);
@@ -2079,7 +2092,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         let still = trays::get_tray(&conn, &tray.id).unwrap();
         assert_eq!(still.quantity, 2);
@@ -3611,7 +3624,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         let row: (String, i64, i64, Option<String>) = conn
             .query_row(
@@ -3805,7 +3818,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         let row: (String, i64, Option<String>) = conn
             .query_row(
@@ -4107,7 +4120,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         let offer_price: String = conn
             .query_row(
@@ -4624,7 +4637,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         println!("PRAGMA user_version = {version}");
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
 
         // Seed one grow + one register row so the domain/class table is non-empty evidence.
         trays::sow_tray(&mut conn, "dun-peas", 1).unwrap();
@@ -4986,7 +4999,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(event_log_count(&conn), before);
 
         let legacy: (String, Option<String>, String) = conn
