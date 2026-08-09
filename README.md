@@ -114,6 +114,8 @@ checkout-endpoint/    optional, only if you sell online
 
 
 
+Operator manual: [docs/OPERATOR-MANUAL.md](docs/OPERATOR-MANUAL.md).
+
 ## License and contact
 
 Apache-2.0 — see [LICENSE](LICENSE).
