@@ -4,10 +4,12 @@ use crate::categories::{self, CostCategoryView};
 use crate::cost_per_tray::{CostPerTrayOutcome, CostPerTrayRequest};
 use crate::costs::{self, CostEventView, ReceiptSourceInfo, RecordCostInput};
 use crate::db::{Db, FarmPaths};
+use crate::export::{self, ExportResult};
 use crate::mileage::{
     self, CorrectMileageTripInput, MileageTripView, RecordMileageTripInput,
 };
 use crate::event_file;
+use std::path::{Path, PathBuf};
 use crate::models::{
     AttentionItem, CapacityRow, Crop, FarmLocation, HarvestGroup, HarvestInput, MoneyStatus,
     OfferView, OrderView, ReconciliationDate, RecountCrop, RecountEntry, RecountResult,
@@ -340,6 +342,39 @@ pub fn open_farm_folder(app: AppHandle, paths: State<'_, FarmPaths>) -> Result<(
     app.opener()
         .reveal_item_in_dir(&paths.folder_path)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_bundle(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+) -> Result<ExportResult, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    export::export_bundle(&conn, &paths.folder_path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn open_export_folder(
+    app: AppHandle,
+    paths: State<'_, FarmPaths>,
+    path: String,
+) -> Result<(), String> {
+    let candidate = PathBuf::from(&path);
+    let farm = paths.folder_path.as_path();
+    if !path_is_inside(farm, &candidate) {
+        return Err("that is not an export folder".into());
+    }
+    app.opener()
+        .reveal_item_in_dir(&candidate)
+        .map_err(|e| e.to_string())
+}
+
+fn path_is_inside(root: &Path, candidate: &Path) -> bool {
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let cand_canon = candidate
+        .canonicalize()
+        .unwrap_or_else(|_| candidate.to_path_buf());
+    cand_canon.starts_with(&root_canon)
 }
 
 #[tauri::command]

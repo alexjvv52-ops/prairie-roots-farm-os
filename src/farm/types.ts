@@ -246,6 +246,13 @@ export type FarmLocation = {
   lastSnapshotAt: string | null;
 };
 
+export type ExportResult = {
+  bundlePath: string;
+  fileCount: number;
+  totalBytes: number;
+  exportedAt: string;
+};
+
 export type RecountCrop = {
   cropId: string;
   cropName: string;

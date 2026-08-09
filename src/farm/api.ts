@@ -7,6 +7,7 @@ import type {
   CostEvent,
   CostPerTrayOutcome,
   Crop,
+  ExportResult,
   FarmLocation,
   HarvestGroup,
   HarvestInput,
@@ -183,6 +184,14 @@ export function farmLocation(): Promise<FarmLocation> {
 
 export function openFarmFolder(): Promise<void> {
   return invoke("open_farm_folder");
+}
+
+export function exportBundle(): Promise<ExportResult> {
+  return invoke("export_bundle");
+}
+
+export function openExportFolder(path: string): Promise<void> {
+  return invoke("open_export_folder", { path });
 }
 
 export function recountState(): Promise<RecountCrop[]> {

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { FarmLocation, SnapshotInfo } from "@/farm/types";
+import type { ExportResult, FarmLocation, SnapshotInfo } from "@/farm/types";
 import {
+  exportBundle,
   farmLocation,
   listSnapshots,
+  openExportFolder,
   openFarmFolder,
   restoreSnapshot,
 } from "@/farm/api";
@@ -38,6 +40,9 @@ export function FarmBackupSheet({
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -54,6 +59,9 @@ export function FarmBackupSheet({
     if (!open) return;
     setConfirm(null);
     setError(null);
+    setExportResult(null);
+    setExportError(null);
+    setExporting(false);
     void load();
   }, [open]);
 
@@ -61,8 +69,32 @@ export function FarmBackupSheet({
     if (!next) {
       setConfirm(null);
       setError(null);
+      setExportResult(null);
+      setExportError(null);
+      setExporting(false);
     }
     onOpenChange(next);
+  }
+
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const result = await exportBundle();
+      setExportResult(result);
+    } catch (err) {
+      const message =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : "Export failed.";
+      setExportError(message);
+      console.error(err);
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function handleRestore() {
@@ -184,6 +216,64 @@ export function FarmBackupSheet({
                 computer itself, copy this folder to a USB stick or a cloud
                 folder.
               </p>
+              <div className="flex flex-col gap-3">
+                <p className="text-base font-medium">Take everything with you</p>
+                <p className="text-sm text-muted-foreground">
+                  Everything the farm knows, in one folder you own — the
+                  database, the full log, your receipts, and your costs ready
+                  for whoever does your taxes. Works with the internet off. No
+                  account, no fee.
+                </p>
+                {exportResult ? (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm">
+                      Exported {exportResult.fileCount} files to{" "}
+                      <span className="break-all font-mono">
+                        {exportResult.bundlePath}
+                      </span>
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-12 text-base"
+                      onClick={() => {
+                        void openExportFolder(exportResult.bundlePath).catch(
+                          (err) => {
+                            console.error(err);
+                          },
+                        );
+                      }}
+                    >
+                      Open folder
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-12 text-base"
+                      onClick={() => {
+                        setExportResult(null);
+                        setExportError(null);
+                      }}
+                    >
+                      Export again
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    className="h-14 w-full text-base"
+                    disabled={exporting}
+                    onClick={() => void handleExport()}
+                  >
+                    {exporting ? "Exporting…" : "Export everything"}
+                  </Button>
+                )}
+                {exportError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {exportError}
+                  </p>
+                )}
+              </div>
               <div className="flex flex-col gap-1">
                 {snapshots.map((snap) => {
                   const label = snapshotLabel(new Date(snap.takenAt));
