@@ -1,7 +1,11 @@
+use crate::assets::{self, AssetView, CorrectAssetInput, RecordAssetInput};
 use crate::attention;
 use crate::categories::{self, CostCategoryView};
 use crate::costs::{self, CostEventView, ReceiptSourceInfo, RecordCostInput};
 use crate::db::{Db, FarmPaths};
+use crate::mileage::{
+    self, CorrectMileageTripInput, MileageTripView, RecordMileageTripInput,
+};
 use crate::event_file;
 use crate::models::{
     AttentionItem, CapacityRow, Crop, FarmLocation, HarvestGroup, HarvestInput, MoneyStatus,
@@ -442,5 +446,127 @@ pub fn record_cost(
             receipt_source_path,
         },
     );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command]
+pub fn list_mileage_trips(state: State<'_, Db>) -> Result<Vec<MileageTripView>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    mileage::list_trips(&conn)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn record_mileage_trip(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    trip_date: String,
+    miles: f64,
+    purpose: Option<String>,
+) -> Result<MileageTripView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = mileage::record_trip(
+        &mut conn,
+        RecordMileageTripInput {
+            trip_date,
+            miles,
+            purpose,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn correct_mileage_trip(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    trip_id: String,
+    trip_date: String,
+    miles: f64,
+    purpose: Option<String>,
+) -> Result<MileageTripView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = mileage::correct_trip(
+        &mut conn,
+        CorrectMileageTripInput {
+            trip_id,
+            trip_date,
+            miles,
+            purpose,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn void_mileage_trip(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    trip_id: String,
+) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = mileage::void_trip(&mut conn, &trip_id);
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command]
+pub fn list_assets(state: State<'_, Db>) -> Result<Vec<AssetView>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    assets::list_assets(&conn)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn record_asset(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    description: String,
+    placed_in_service_on: String,
+    cost_cents: i64,
+    disposal_date: Option<String>,
+) -> Result<AssetView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = assets::record_asset(
+        &mut conn,
+        RecordAssetInput {
+            description,
+            placed_in_service_on,
+            cost_cents,
+            disposal_date,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn correct_asset(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    asset_id: String,
+    description: String,
+    placed_in_service_on: String,
+    cost_cents: i64,
+    disposal_date: Option<String>,
+) -> Result<AssetView, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = assets::correct_asset(
+        &mut conn,
+        CorrectAssetInput {
+            asset_id,
+            description,
+            placed_in_service_on,
+            cost_cents,
+            disposal_date,
+        },
+    );
+    flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn void_asset(
+    state: State<'_, Db>,
+    paths: State<'_, FarmPaths>,
+    asset_id: String,
+) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let result = assets::void_asset(&mut conn, &asset_id);
     flush_ok(&conn, &paths, result)
 }

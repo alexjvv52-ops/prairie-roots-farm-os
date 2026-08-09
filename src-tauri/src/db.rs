@@ -11,7 +11,7 @@ pub struct FarmPaths {
     pub snapshots_dir: PathBuf,
 }
 
-pub const SCHEMA_VERSION: i32 = 12;
+pub const SCHEMA_VERSION: i32 = 13;
 
 /// Frozen tray id seeded into `open_v1_in_memory` (Phase 1 Ruling 2).
 #[cfg(test)]
@@ -136,6 +136,104 @@ CREATE TABLE IF NOT EXISTS consumption_events (
   linked_cost_event_id  TEXT,
   notes                 TEXT
 );
+"#;
+
+/// Mileage trips — per-trip, dated, MILES. No dollar column exists here and
+/// none may be added (Track 4 residual).
+const SCHEMA_V13_MILEAGE_TRIPS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS mileage_trips (
+  trip_id        TEXT PRIMARY KEY,
+  origin         TEXT NOT NULL CHECK (origin = 'farm_os'),
+  trip_date      TEXT NOT NULL,
+  miles          REAL NOT NULL CHECK (miles > 0),
+  purpose        TEXT,
+  voided_at      TEXT,
+  last_event_id  TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_date ON mileage_trips(trip_date);
+
+CREATE TRIGGER IF NOT EXISTS mileage_trips_before_insert
+BEFORE INSERT ON mileage_trips
+BEGIN
+  SELECT CASE
+    WHEN NEW.miles IS NULL OR NEW.miles <= 0
+      THEN RAISE(ABORT, 'mileage_trips.miles must be positive')
+    WHEN NEW.trip_date IS NULL OR NEW.trip_date = ''
+      THEN RAISE(ABORT, 'mileage_trips.trip_date required')
+    WHEN NEW.trip_date > date('now', 'localtime')
+      THEN RAISE(ABORT, 'mileage_trips.trip_date cannot be future')
+  END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS mileage_trips_before_update
+BEFORE UPDATE ON mileage_trips
+BEGIN
+  SELECT CASE
+    WHEN NEW.trip_id IS NOT OLD.trip_id
+      THEN RAISE(ABORT, 'mileage_trips.trip_id immutable')
+    WHEN NEW.origin IS NOT OLD.origin
+      THEN RAISE(ABORT, 'mileage_trips.origin immutable')
+    WHEN NEW.created_at IS NOT OLD.created_at
+      THEN RAISE(ABORT, 'mileage_trips.created_at immutable')
+    WHEN NEW.miles IS NULL OR NEW.miles <= 0
+      THEN RAISE(ABORT, 'mileage_trips.miles must be positive')
+  END;
+END;
+"#;
+
+/// Asset register — the four operator fields and nothing derived. Adding a
+/// computed column here is a BOOKS-BOUNDARY violation (Track 4 residual).
+const SCHEMA_V13_ASSETS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS assets (
+  asset_id              TEXT PRIMARY KEY,
+  origin                TEXT NOT NULL CHECK (origin = 'farm_os'),
+  description           TEXT NOT NULL CHECK (length(trim(description)) > 0),
+  placed_in_service_on  TEXT NOT NULL,
+  cost_cents            INTEGER NOT NULL CHECK (cost_cents > 0),
+  disposal_date         TEXT,
+  last_event_id         TEXT NOT NULL,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  -- voided_at is last so the 2.2 shape-convergence ALTER produces DDL
+  -- identical to a fresh CREATE. Do not reorder.
+  voided_at             TEXT
+);
+
+CREATE TRIGGER IF NOT EXISTS assets_before_insert
+BEFORE INSERT ON assets
+BEGIN
+  SELECT CASE
+    WHEN NEW.cost_cents IS NULL OR NEW.cost_cents <= 0
+      THEN RAISE(ABORT, 'assets.cost_cents must be positive')
+    WHEN NEW.description IS NULL OR trim(NEW.description) = ''
+      THEN RAISE(ABORT, 'assets.description required')
+    WHEN NEW.placed_in_service_on > date('now', 'localtime')
+      THEN RAISE(ABORT, 'assets.placed_in_service_on cannot be future')
+    WHEN NEW.disposal_date IS NOT NULL
+         AND NEW.disposal_date < NEW.placed_in_service_on
+      THEN RAISE(ABORT, 'assets.disposal_date before placed_in_service_on')
+  END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS assets_before_update
+BEFORE UPDATE ON assets
+BEGIN
+  SELECT CASE
+    WHEN NEW.asset_id IS NOT OLD.asset_id
+      THEN RAISE(ABORT, 'assets.asset_id immutable')
+    WHEN NEW.origin IS NOT OLD.origin
+      THEN RAISE(ABORT, 'assets.origin immutable')
+    WHEN NEW.created_at IS NOT OLD.created_at
+      THEN RAISE(ABORT, 'assets.created_at immutable')
+    WHEN NEW.cost_cents IS NULL OR NEW.cost_cents <= 0
+      THEN RAISE(ABORT, 'assets.cost_cents must be positive')
+    WHEN NEW.disposal_date IS NOT NULL
+         AND NEW.disposal_date < NEW.placed_in_service_on
+      THEN RAISE(ABORT, 'assets.disposal_date before placed_in_service_on')
+  END;
+END;
 "#;
 
 /// Operator-supplied seed rates (oz per 10x20 tray). NULL = no proposal.
@@ -742,6 +840,34 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
         version = 12;
     }
 
+    if version < 13 {
+        // Track 4 residual: mileage_trips + assets projection tables, and
+        // regenerate event_log triggers so the five new register kinds are
+        // whitelisted. Without the trigger reinstall every mileage/asset write
+        // aborts at the database. Existing rows and columns untouched.
+        conn.execute_batch(DROP_EVENT_LOG_TRIGGERS_SQL)
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(&schema_v9_event_log_triggers_sql())
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(SCHEMA_V13_MILEAGE_TRIPS_SQL)
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(SCHEMA_V13_ASSETS_SQL)
+            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "user_version", 13)
+            .map_err(|e| e.to_string())?;
+        version = 13;
+    }
+
+    // v13 shape convergence — assets.voided_at was added to the v13 shape
+    // while v13 was still unreleased. A development database that migrated to
+    // v13 before that edit has the nine-column table and would never receive
+    // the column, because the v13 block above is already satisfied. Additive,
+    // idempotent, and safe to delete once no such database exists.
+    if version == 13 && !assets_has_voided_at_column(conn)? {
+        conn.execute_batch("ALTER TABLE assets ADD COLUMN voided_at TEXT;")
+            .map_err(|e| e.to_string())?;
+    }
+
     if version > SCHEMA_VERSION {
         return Err(format!(
             "farm database version {version} is newer than this app ({SCHEMA_VERSION})"
@@ -841,6 +967,21 @@ fn crops_has_seed_rate_column(conn: &Connection) -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
     for r in rows {
         if r.map_err(|e| e.to_string())? == "seed_rate_oz_per_tray" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn assets_has_voided_at_column(conn: &Connection) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(assets)")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        if r.map_err(|e| e.to_string())? == "voided_at" {
             return Ok(true);
         }
     }

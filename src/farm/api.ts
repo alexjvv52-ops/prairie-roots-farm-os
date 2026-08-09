@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Asset,
   AttentionItem,
   CapacityRow,
   CostCategory,
@@ -8,6 +9,7 @@ import type {
   FarmLocation,
   HarvestGroup,
   HarvestInput,
+  MileageTrip,
   MoneyStatus,
   NewPaidOrders,
   OfferView,
@@ -232,4 +234,76 @@ export function recordCost(input: {
     descriptor: input.descriptor ?? null,
     receiptSourcePath: input.receiptSourcePath ?? null,
   });
+}
+
+export function listMileageTrips(): Promise<MileageTrip[]> {
+  return invoke("list_mileage_trips");
+}
+
+export function recordMileageTrip(input: {
+  tripDate: string;
+  miles: number;
+  purpose?: string | null;
+}): Promise<MileageTrip> {
+  return invoke("record_mileage_trip", {
+    tripDate: input.tripDate,
+    miles: input.miles,
+    purpose: input.purpose ?? null,
+  });
+}
+
+export function correctMileageTrip(input: {
+  tripId: string;
+  tripDate: string;
+  miles: number;
+  purpose?: string | null;
+}): Promise<MileageTrip> {
+  return invoke("correct_mileage_trip", {
+    tripId: input.tripId,
+    tripDate: input.tripDate,
+    miles: input.miles,
+    purpose: input.purpose ?? null,
+  });
+}
+
+export function voidMileageTrip(tripId: string): Promise<void> {
+  return invoke("void_mileage_trip", { tripId });
+}
+
+export function listAssets(): Promise<Asset[]> {
+  return invoke("list_assets");
+}
+
+export function recordAsset(input: {
+  description: string;
+  placedInServiceOn: string;
+  costCents: number;
+  disposalDate?: string | null;
+}): Promise<Asset> {
+  return invoke("record_asset", {
+    description: input.description,
+    placedInServiceOn: input.placedInServiceOn,
+    costCents: input.costCents,
+    disposalDate: input.disposalDate ?? null,
+  });
+}
+
+export function correctAsset(input: {
+  assetId: string;
+  description: string;
+  placedInServiceOn: string;
+  costCents: number;
+  disposalDate?: string | null;
+}): Promise<Asset> {
+  return invoke("correct_asset", {
+    assetId: input.assetId,
+    description: input.description,
+    placedInServiceOn: input.placedInServiceOn,
+    costCents: input.costCents,
+    disposalDate: input.disposalDate ?? null,
+  });
+}
+
+export function voidAsset(assetId: string): Promise<void> {
+  return invoke("void_asset", { assetId });
 }

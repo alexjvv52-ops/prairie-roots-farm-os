@@ -1,6 +1,8 @@
+use crate::assets;
 use crate::consumption;
 use crate::costs;
 use crate::events::{EventRecord, Kind};
+use crate::mileage;
 use crate::money;
 use crate::trays;
 use rusqlite::Transaction;
@@ -25,6 +27,12 @@ pub fn apply_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Stri
         Kind::StripeDisputed => money::apply_stripe_disputed(tx, event),
         Kind::CostMoneyOut => costs::apply_cost_money_out(tx, event),
         Kind::ConsumptionPhysical => consumption::apply_consumption_physical(tx, event),
+        Kind::MileageTripLogged => mileage::apply_mileage_trip(tx, event),
+        Kind::MileageTripCorrected => mileage::apply_mileage_trip_corrected(tx, event),
+        Kind::MileageTripVoided => mileage::apply_mileage_trip_voided(tx, event),
+        Kind::AssetRecorded => assets::apply_asset_recorded(tx, event),
+        Kind::AssetCorrected => assets::apply_asset_corrected(tx, event),
+        Kind::AssetVoided => assets::apply_asset_voided(tx, event),
         // Explicit no-op: filesystem artifact only (Ruling 2 category 3).
         Kind::SnapshotTaken => Ok(()),
     }

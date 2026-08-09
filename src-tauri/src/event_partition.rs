@@ -28,12 +28,24 @@ pub enum Kind {
     CostMoneyOut,
     /// Physical consumption in units only — Farm OS origin (Track 4).
     ConsumptionPhysical,
+    /// One dated trip, stored in miles (Track 4 residual).
+    MileageTripLogged,
+    /// Full replacement of a trip's operator fields.
+    MileageTripCorrected,
+    /// Retires a trip that never happened. Row survives, marked voided.
+    MileageTripVoided,
+    /// One asset, four operator fields, no computation (Track 4 residual).
+    AssetRecorded,
+    /// Full replacement of an asset's four operator fields.
+    AssetCorrected,
+    /// Retires an asset entered in error. Row survives, marked voided.
+    AssetVoided,
 }
 
 impl Kind {
     /// Every variant. Used to prove `tier` is total at runtime and to drive
     /// trigger SQL so the database cannot drift from the type system.
-    pub const ALL: [Kind; 15] = [
+    pub const ALL: [Kind; 21] = [
         Kind::TraySown,
         Kind::TraysAdvanced,
         Kind::TraysHarvested,
@@ -49,6 +61,12 @@ impl Kind {
         Kind::SnapshotTaken,
         Kind::CostMoneyOut,
         Kind::ConsumptionPhysical,
+        Kind::MileageTripLogged,
+        Kind::MileageTripCorrected,
+        Kind::MileageTripVoided,
+        Kind::AssetRecorded,
+        Kind::AssetCorrected,
+        Kind::AssetVoided,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -68,6 +86,12 @@ impl Kind {
             Kind::SnapshotTaken => "snapshot.taken",
             Kind::CostMoneyOut => "cost.money_out",
             Kind::ConsumptionPhysical => "consumption.physical",
+            Kind::MileageTripLogged => "mileage.trip",
+            Kind::MileageTripCorrected => "mileage.trip_corrected",
+            Kind::MileageTripVoided => "mileage.trip_voided",
+            Kind::AssetRecorded => "asset.recorded",
+            Kind::AssetCorrected => "asset.corrected",
+            Kind::AssetVoided => "asset.voided",
         }
     }
 
@@ -88,6 +112,12 @@ impl Kind {
             "snapshot.taken" => Ok(Kind::SnapshotTaken),
             "cost.money_out" => Ok(Kind::CostMoneyOut),
             "consumption.physical" => Ok(Kind::ConsumptionPhysical),
+            "mileage.trip" => Ok(Kind::MileageTripLogged),
+            "mileage.trip_corrected" => Ok(Kind::MileageTripCorrected),
+            "mileage.trip_voided" => Ok(Kind::MileageTripVoided),
+            "asset.recorded" => Ok(Kind::AssetRecorded),
+            "asset.corrected" => Ok(Kind::AssetCorrected),
+            "asset.voided" => Ok(Kind::AssetVoided),
             other => Err(format!("unknown event kind: {other}")),
         }
     }
@@ -112,6 +142,12 @@ impl Kind {
             Kind::CostMoneyOut => (EventDomain::Register, Some(EventClass::MoneyOut)),
             Kind::ConsumptionPhysical => {
                 (EventDomain::Register, Some(EventClass::PhysicalConsumption))
+            }
+            Kind::MileageTripLogged | Kind::MileageTripCorrected | Kind::MileageTripVoided => {
+                (EventDomain::Register, Some(EventClass::Mileage))
+            }
+            Kind::AssetRecorded | Kind::AssetCorrected | Kind::AssetVoided => {
+                (EventDomain::Register, Some(EventClass::AssetRegister))
             }
         }
     }
@@ -237,6 +273,12 @@ pub const REGISTER_KINDS: &[&str] = &[
     "snapshot.taken",
     "cost.money_out",
     "consumption.physical",
+    "mileage.trip",
+    "mileage.trip_corrected",
+    "mileage.trip_voided",
+    "asset.recorded",
+    "asset.corrected",
+    "asset.voided",
 ];
 
 /// Register kinds as of schema v10 (before consumption.physical). Frozen for
@@ -249,6 +291,25 @@ pub const REGISTER_KINDS_V10: &[&str] = &[
     "snapshot.taken",
     "cost.money_out",
 ];
+
+/// Register kinds as of schema v12 (before mileage / asset). Frozen for
+/// v12 fixture DBs so migration T-v13 can prove the trigger reinstall.
+#[cfg(test)]
+pub const REGISTER_KINDS_V12: &[&str] = &[
+    "stripe.session_paid",
+    "stripe.refunded",
+    "stripe.disputed",
+    "snapshot.taken",
+    "cost.money_out",
+    "consumption.physical",
+];
+
+/// v12-era triggers: the five Track 4 residual kinds not yet whitelisted.
+#[cfg(test)]
+pub fn schema_v12_event_log_triggers_sql() -> String {
+    let grow = grow_kinds();
+    schema_event_log_triggers_sql(&grow, REGISTER_KINDS_V12)
+}
 
 pub fn is_partition_kind(kind: &str) -> bool {
     Kind::parse(kind).is_ok()

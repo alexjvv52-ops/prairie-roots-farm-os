@@ -145,30 +145,41 @@ pub fn guard_row(row: &EventLogRow) -> Result<(), String> {
         return Err("undoes_seq set without reverses_event_id (Ruling 4 one-way)".into());
     }
 
-    // cost.money_out: payload carries eventId/origin copies. Identity is the
-    // record; disagreement must never reach the append-only file.
-    if row.kind == "cost.money_out" {
+    // Kinds whose payload carries eventId/origin copies. Identity is the record;
+    // disagreement must never reach the append-only file.
+    const IDENTITY_ECHO_KINDS: &[&str] = &[
+        "cost.money_out",
+        "mileage.trip",
+        "mileage.trip_corrected",
+        "mileage.trip_voided",
+        "asset.recorded",
+        "asset.corrected",
+        "asset.voided",
+    ];
+    if IDENTITY_ECHO_KINDS.contains(&row.kind.as_str()) {
         let payload: Value = serde_json::from_str(&row.payload).map_err(|e| {
-            format!("cost.money_out payload is not JSON: {e}")
+            format!("{} payload is not JSON: {e}", row.kind)
         })?;
         let payload_event_id = payload
             .get("eventId")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "cost.money_out payload missing eventId".to_string())?;
+            .ok_or_else(|| format!("{} payload missing eventId", row.kind))?;
         if payload_event_id != row.event_id {
-            return Err(
-                "cost.money_out payload eventId disagrees with event record".into(),
-            );
+            return Err(format!(
+                "{} payload eventId disagrees with event record",
+                row.kind
+            ));
         }
         let payload_origin = payload
             .get("origin")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "cost.money_out payload missing origin".to_string())?;
+            .ok_or_else(|| format!("{} payload missing origin", row.kind))?;
         // origin already validated non-empty above.
         if payload_origin != origin.unwrap() {
-            return Err(
-                "cost.money_out payload origin disagrees with event record".into(),
-            );
+            return Err(format!(
+                "{} payload origin disagrees with event record",
+                row.kind
+            ));
         }
     }
 

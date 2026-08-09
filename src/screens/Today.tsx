@@ -34,6 +34,8 @@ import {
 import { SellOnlineSheet } from "@/components/SellOnlineSheet";
 import { MoneyJustLeftSheet } from "@/components/MoneyJustLeftSheet";
 import { SeedRatesSheet } from "@/components/SeedRatesSheet";
+import { MilesSheet } from "@/components/MilesSheet";
+import { EquipmentSheet } from "@/components/EquipmentSheet";
 
 function trayCountLabel(quantity: number): string {
   return `${quantity} ${quantity === 1 ? "tray" : "trays"}`;
@@ -77,6 +79,8 @@ export function Today() {
   const [seedRatesOpen, setSeedRatesOpen] = useState(false);
   const [moneyLeftOpen, setMoneyLeftOpen] = useState(false);
   const [deliveryCostOpen, setDeliveryCostOpen] = useState(false);
+  const [milesOpen, setMilesOpen] = useState(false);
+  const [equipmentOpen, setEquipmentOpen] = useState(false);
   const [newPaidCount, setNewPaidCount] = useState(0);
 
   async function refreshAttention() {
@@ -464,6 +468,20 @@ export function Today() {
               >
                 Money out for a delivery run
               </Card>
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => setMilesOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setMilesOpen(true);
+                  }
+                }}
+                className="flex min-h-24 cursor-pointer items-center justify-center p-8 text-center text-xl font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Log miles
+              </Card>
               <button
                 type="button"
                 onClick={() => setMoneyLeftOpen(true)}
@@ -477,6 +495,13 @@ export function Today() {
                 className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 Seed rates
+              </button>
+              <button
+                type="button"
+                onClick={() => setEquipmentOpen(true)}
+                className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Equipment
               </button>
               <button
                 type="button"
@@ -673,6 +698,21 @@ export function Today() {
                 Money out for a delivery run
               </Card>
 
+              <Card
+                role="button"
+                tabIndex={0}
+                onClick={() => setMilesOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setMilesOpen(true);
+                  }
+                }}
+                className={actionCardClass}
+              >
+                Log miles
+              </Card>
+
               {/* Paid orders info — zero taps; after action rows, before secondary */}
               {newPaidCount > 0 && (
                 <p className="text-base text-muted-foreground">
@@ -701,9 +741,9 @@ export function Today() {
                 </button>
               )}
 
-              {/* TODO(design-debt): Today now carries three secondary controls — Count the shelf,
-                  Sell online, and the backup line. A fourth breaks the pattern and needs a rethink,
-                  not another row. */}
+              {/* TODO(design-debt): Today now carries five secondary controls — Count the shelf,
+                  Sell online, Seed rates, Equipment, and the backup line. A sixth breaks the
+                  pattern and needs a rethink, not another row. */}
               {view.activeTrayCount > 0 && (
                 <button
                   type="button"
@@ -720,6 +760,14 @@ export function Today() {
                 className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 Seed rates
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEquipmentOpen(true)}
+                className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Equipment
               </button>
 
               <button
@@ -783,6 +831,13 @@ export function Today() {
         open={deliveryCostOpen}
         onOpenChange={setDeliveryCostOpen}
         moment="delivery"
+      />
+
+      <MilesSheet open={milesOpen} onOpenChange={setMilesOpen} />
+
+      <EquipmentSheet
+        open={equipmentOpen}
+        onOpenChange={setEquipmentOpen}
       />
     </main>
   );

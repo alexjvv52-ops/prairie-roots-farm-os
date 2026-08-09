@@ -116,6 +116,9 @@ pub fn write_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<i64, Str
     if event.kind == Kind::ConsumptionPhysical {
         crate::consumption::validate_consumption_event(event)?;
     }
+    // Seal the Track 4 residual kinds. grow/cost payloads stay open.
+    crate::mileage::validate_mileage_event(event)?;
+    crate::assets::validate_asset_event(event)?;
     let (domain, class) = event.kind.tier();
     raw_insert_event_log(
         tx,
@@ -226,12 +229,17 @@ pub fn newest_undoable(conn: &Connection) -> Result<Option<UndoableEvent>, Strin
     // Skip undo markers, externally-originated stripe.* observations, and
     // register-tier physical consumption — undoing a payment locally would
     // desync Stripe; consumption records must not block grow undo after sow.
+    // Mileage / asset corrections are made by appending a correction event,
+    // not by undo — undoing one locally would leave the projection row standing.
     conn.query_row(
         "SELECT seq, id, kind, inverse FROM event_log
          WHERE undone_at IS NULL
            AND kind <> 'undo'
            AND kind NOT LIKE 'stripe.%'
            AND kind <> 'consumption.physical'
+           AND kind NOT IN ('mileage.trip','mileage.trip_corrected',
+                            'mileage.trip_voided','asset.recorded','asset.corrected',
+                            'asset.voided')
          ORDER BY seq DESC
          LIMIT 1",
         [],

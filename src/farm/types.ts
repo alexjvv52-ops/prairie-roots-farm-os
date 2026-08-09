@@ -160,6 +160,31 @@ export type CostEvent = {
   updatedAt: string;
 };
 
+/** One dated trip, stored in miles. There is no dollar value on this type. */
+export type MileageTrip = {
+  tripId: string;
+  origin: string;
+  tripDate: string;
+  miles: number;
+  purpose: string | null;
+  lastEventId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Asset register row — four operator fields. Nothing computed. */
+export type Asset = {
+  assetId: string;
+  origin: string;
+  description: string;
+  placedInServiceOn: string;
+  costCents: number;
+  disposalDate: string | null;
+  lastEventId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type SnapshotInfo = {
   fileName: string;
   path: string;

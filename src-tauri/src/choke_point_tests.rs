@@ -46,8 +46,8 @@ fn kind_tier_is_total_over_full_enum() {
         // Exactly one pair: calling twice is identical.
         assert_eq!(kind.tier(), (domain, class));
     }
-    // Track 4 added ConsumptionPhysical; inventory count tracks the closed set size.
-    assert_eq!(Kind::ALL.len(), 15);
+    // Track 4 residual added mileage + asset kinds; inventory count tracks the closed set size.
+    assert_eq!(Kind::ALL.len(), 21);
 }
 
 /// 7. Adding a Kind variant without a partition mapping fails to COMPILE —
@@ -335,7 +335,14 @@ fn clock_calls_absent_from_write_path_apply_and_partition() {
         }
     }
     // apply_* bodies: scan for `fn apply_` … next top-level fn; no clock needles.
-    for rel in ["trays.rs", "money.rs", "attention.rs", "costs.rs"] {
+    for rel in [
+        "trays.rs",
+        "money.rs",
+        "attention.rs",
+        "costs.rs",
+        "mileage.rs",
+        "assets.rs",
+    ] {
         let path = root.join(rel);
         let src = fs::read_to_string(&path).unwrap();
         for block in apply_fn_bodies(&src) {
