@@ -36,6 +36,7 @@ import { MoneyJustLeftSheet } from "@/components/MoneyJustLeftSheet";
 import { SeedRatesSheet } from "@/components/SeedRatesSheet";
 import { MilesSheet } from "@/components/MilesSheet";
 import { EquipmentSheet } from "@/components/EquipmentSheet";
+import { CostPerTraySheet } from "@/components/CostPerTraySheet";
 
 function trayCountLabel(quantity: number): string {
   return `${quantity} ${quantity === 1 ? "tray" : "trays"}`;
@@ -81,6 +82,7 @@ export function Today() {
   const [deliveryCostOpen, setDeliveryCostOpen] = useState(false);
   const [milesOpen, setMilesOpen] = useState(false);
   const [equipmentOpen, setEquipmentOpen] = useState(false);
+  const [costPerTrayOpen, setCostPerTrayOpen] = useState(false);
   const [newPaidCount, setNewPaidCount] = useState(0);
 
   async function refreshAttention() {
@@ -505,6 +507,13 @@ export function Today() {
               </button>
               <button
                 type="button"
+                onClick={() => setCostPerTrayOpen(true)}
+                className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                What a tray costs
+              </button>
+              <button
+                type="button"
                 onClick={() => setBackupOpen(true)}
                 className="text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
@@ -741,9 +750,9 @@ export function Today() {
                 </button>
               )}
 
-              {/* TODO(design-debt): Today now carries five secondary controls — Count the shelf,
-                  Sell online, Seed rates, Equipment, and the backup line. A sixth breaks the
-                  pattern and needs a rethink, not another row. */}
+              {/* TODO(design-debt): Today now carries six secondary controls — Count the shelf,
+                  Sell online, Seed rates, Equipment, What a tray costs, and the backup line.
+                  The grouping rethink is still owed. */}
               {view.activeTrayCount > 0 && (
                 <button
                   type="button"
@@ -768,6 +777,14 @@ export function Today() {
                 className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 Equipment
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCostPerTrayOpen(true)}
+                className="flex min-h-11 items-center text-left text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                What a tray costs
               </button>
 
               <button
@@ -838,6 +855,11 @@ export function Today() {
       <EquipmentSheet
         open={equipmentOpen}
         onOpenChange={setEquipmentOpen}
+      />
+
+      <CostPerTraySheet
+        open={costPerTrayOpen}
+        onOpenChange={setCostPerTrayOpen}
       />
     </main>
   );

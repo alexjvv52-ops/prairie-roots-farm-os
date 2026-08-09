@@ -1,6 +1,7 @@
 use crate::assets::{self, AssetView, CorrectAssetInput, RecordAssetInput};
 use crate::attention;
 use crate::categories::{self, CostCategoryView};
+use crate::cost_per_tray::{CostPerTrayOutcome, CostPerTrayRequest};
 use crate::costs::{self, CostEventView, ReceiptSourceInfo, RecordCostInput};
 use crate::db::{Db, FarmPaths};
 use crate::mileage::{
@@ -447,6 +448,26 @@ pub fn record_cost(
         },
     );
     flush_ok(&conn, &paths, result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn cost_per_tray(
+    state: State<'_, Db>,
+    window: String,
+    from: Option<String>,
+    to: Option<String>,
+    category_ids: Option<Vec<String>>,
+) -> Result<CostPerTrayOutcome, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::cost_per_tray::cost_per_tray(
+        &conn,
+        CostPerTrayRequest {
+            window,
+            from,
+            to,
+            category_ids,
+        },
+    )
 }
 
 #[tauri::command]

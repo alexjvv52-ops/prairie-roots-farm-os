@@ -185,6 +185,54 @@ export type Asset = {
   updatedAt: string;
 };
 
+export type IncludedPayment = {
+  eventId: string;
+  datePaid: string;
+  payee: string;
+  canonicalCategory: string;
+  amountCents: number;
+};
+
+export type IncludedTrayRecord = {
+  eventId: string;
+  occurredOn: string;
+  varietyOrItem: string;
+  quantity: number;
+  seedQuantityRecorded: boolean;
+};
+
+export type MethodStatement = {
+  windowLabel: string;
+  windowFrom: string;
+  windowTo: string;
+  originFilter: string;
+  paymentRule: string;
+  physicalRule: string;
+  joinRule: string;
+  exclusionRule: string;
+  payments: IncludedPayment[];
+  trayRecords: IncludedTrayRecord[];
+  paymentCount: number;
+  trayRecordCount: number;
+  totalPaidCents: number;
+  totalTrays: number;
+  trayRecordsWithSeedRecorded: number;
+  trayRecordsWithoutSeedRecorded: number;
+  completenessNote: string;
+};
+
+/** Derived at query time. Never stored.
+ *  Do not cache this in component state beyond the current view. */
+export type CostPerTrayFigure = {
+  totalPaidCents: number;
+  totalTrays: number;
+  centsPerTray: number;
+};
+
+export type CostPerTrayOutcome =
+  | { kind: "computed"; figure: CostPerTrayFigure; method: MethodStatement }
+  | { kind: "refused"; reason: string; method: MethodStatement };
+
 export type SnapshotInfo = {
   fileName: string;
   path: string;

@@ -5,6 +5,7 @@ import type {
   CapacityRow,
   CostCategory,
   CostEvent,
+  CostPerTrayOutcome,
   Crop,
   FarmLocation,
   HarvestGroup,
@@ -306,4 +307,18 @@ export function correctAsset(input: {
 
 export function voidAsset(assetId: string): Promise<void> {
   return invoke("void_asset", { assetId });
+}
+
+export function costPerTray(input: {
+  window: string;
+  from?: string | null;
+  to?: string | null;
+  categoryIds?: string[] | null;
+}): Promise<CostPerTrayOutcome> {
+  return invoke("cost_per_tray", {
+    window: input.window,
+    from: input.from ?? null,
+    to: input.to ?? null,
+    categoryIds: input.categoryIds ?? null,
+  });
 }

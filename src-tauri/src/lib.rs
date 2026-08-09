@@ -3,6 +3,7 @@ mod attention;
 mod categories;
 mod commands;
 mod consumption;
+mod cost_per_tray;
 mod costs;
 mod db;
 mod divergence;
@@ -27,6 +28,8 @@ mod choke_point_tests;
 mod consumption_tests;
 #[cfg(test)]
 mod cost_event_tests;
+#[cfg(test)]
+mod cost_per_tray_tests;
 #[cfg(test)]
 mod mileage_asset_tests;
 
@@ -134,6 +137,7 @@ pub fn run() {
                 commands::list_cost_categories,
                 commands::receipt_source_info,
                 commands::record_cost,
+                commands::cost_per_tray,
                 commands::list_mileage_trips,
                 commands::record_mileage_trip,
                 commands::correct_mileage_trip,
@@ -191,6 +195,7 @@ pub fn run() {
                 commands::list_cost_categories,
                 commands::receipt_source_info,
                 commands::record_cost,
+                commands::cost_per_tray,
                 commands::list_mileage_trips,
                 commands::record_mileage_trip,
                 commands::correct_mileage_trip,
