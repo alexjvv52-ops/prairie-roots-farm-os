@@ -1,4 +1,4 @@
-﻿#  Prairie Roots Farm OS
+#  Prairie Roots Farm OS
 
 A free, local desktop app for microgreens growers that answers one question — what should I do right now, and are the numbers true.
 
@@ -120,6 +120,6 @@ Operator manual: [docs/OPERATOR-MANUAL.md](docs/OPERATOR-MANUAL.md).
 
 Apache-2.0 — see [LICENSE](LICENSE).
 
-If you need help, open an issue. I'm new to this.
+Questions or problems: open an issue, or email prairieroots26@gmail.com
 
 Want to read or change the code? See [CONTRIBUTING.md](CONTRIBUTING.md).
